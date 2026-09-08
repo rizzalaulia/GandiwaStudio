@@ -7,7 +7,7 @@
 
 ## Status
 
-**Pre-development / documentation-first.** The MVP contract is locked as `mvp-1.0`. No production application is claimed yet.
+**MVP implementation started.** The contract is locked as `mvp-1.0`. The repository currently contains reproducible application foundations only; no production-ready workflow is claimed yet.
 
 ## Vision
 
@@ -38,7 +38,7 @@ SQLite         WAL cache/index + durable runtime queue
 production     Static frontend + host Nginx + Docker Compose on bejo2-vnic
 ```
 
-The directories are contracts for future implementation and intentionally contain no fabricated application code.
+The application directories now contain the reproducible TypeScript and Python foundations. Product workflows remain intentionally absent until their corresponding issues and tests are completed.
 
 ## Repository Layout
 
@@ -53,7 +53,7 @@ scripts/               Repository verification utilities
 
 ## Development
 
-Implementation has not started. Before adding code, read:
+Before adding behavior, read:
 
 1. [Locked development sequence](docs/DEVELOPMENT-SEQUENCE.md)
 2. [Technology contract](docs/TECHNOLOGY.md)
@@ -63,11 +63,32 @@ Implementation has not started. Before adding code, read:
 6. [Adobe ruleset](docs/ADOBE-RULESET.md)
 7. [bejo2 deployment contract](docs/DEPLOYMENT-BEJO2.md)
 
-Run the current documentation quality gate:
+### Prerequisites
+
+- Node.js `22.23.2` (see `.node-version`)
+- Corepack with pnpm `12.3.4` from `packageManager`
+- Python `3.12.3` (see `.python-version`)
+- uv `0.12.3` or a compatible newer release
+
+### Reproducible setup
 
 ```bash
-python3 scripts/verify_repository.py
+corepack enable
+pnpm install --frozen-lockfile
+uv sync --project apps/api --locked
 ```
+
+### Canonical commands
+
+```bash
+pnpm lint
+pnpm typecheck
+pnpm test
+pnpm build
+pnpm check
+```
+
+`pnpm check` runs lint, strict type checks, tests, production builds, and repository verification. The web scaffold has no product actions, and the Python package intentionally exposes no API route until the health/readiness issue is implemented.
 
 ## Security
 

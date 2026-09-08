@@ -1,0 +1,20 @@
+{
+  "name": "gandiwa-studio",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Compliance-aware local-first workspace for Adobe Stock contributors.",
+  "license": "Apache-2.0",
+  "packageManager": "pnpm@12.3.4",
+  "engines": {
+    "node": ">=22.22.2 <23",
+    "pnpm": "12.3.4"
+  },
+  "scripts": {
+    "build": "corepack pnpm -r --if-present build && uv build --project apps/api",
+    "check": "corepack pnpm lint && corepack pnpm typecheck && corepack pnpm test && corepack pnpm build && corepack pnpm verify",
+    "test": "corepack pnpm -r --if-present test && uv run --project apps/api pytest tests/scaffold",
+    "typecheck": "corepack pnpm -r --if-present typecheck && uv run --project apps/api mypy apps/api/src",
+    "lint": "corepack pnpm -r --if-present lint && uv run --project apps/api ruff check apps/api tests/scaffold",
+    "verify": "python3 scripts/verify_repository.py"
+  }
+}

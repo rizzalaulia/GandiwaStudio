@@ -1,6 +1,6 @@
 # Processing API and Worker
 
-Planned Python 3.12 FastAPI application with a separate worker command.
+Python 3.12 FastAPI package foundation. API routes and the separate worker command intentionally remain absent until Issues #3 and #5 are implemented with tests.
 
 ## API Responsibilities
 
