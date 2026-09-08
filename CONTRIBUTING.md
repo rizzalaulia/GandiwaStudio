@@ -4,7 +4,7 @@ Thank you for helping build Gandiwa Studio.
 
 ## Before You Start
 
-- Read the locked scope in `docs/PRD.md` and `docs/BRD.md`.
+- Read `docs/DEVELOPMENT-SEQUENCE.md`, `docs/TECHNOLOGY.md`, `docs/ARCHITECTURE.md`, and the locked scope in `docs/PRD.md`/`docs/BRD.md`.
 - Search existing issues before opening another.
 - Discuss large features in an issue before implementation.
 - Never include real API keys, private assets, model/property releases, or copyrighted test material.
@@ -28,13 +28,15 @@ Thank you for helping build Gandiwa Studio.
 
 ## Scope Control
 
-`mvp-1.0` excludes multi-user, built-in cloud sync, fine-tuning, local heavy inference, full vector editing, native AI/EPS export, Gandiwa-owned routing/fallback, and automatic Adobe upload. Propose these separately; do not hide them in unrelated pull requests.
+`mvp-1.0` excludes multi-user, built-in cloud sync, fine-tuning, all local AI inference, full vector editing, native AI/EPS export, Gandiwa-owned routing/fallback, and automatic Adobe upload. Propose these separately; do not hide them in unrelated pull requests.
 
 ## Code Style
 
-- Frontend: TypeScript strict mode; format and lint through repository scripts once bootstrapped.
-- Backend: typed Python; format/lint through repository scripts once bootstrapped.
-- Prefer explicit contracts and deterministic tests over provider-specific assumptions.
+- Frontend: React + TypeScript strict + Vite; Zustand only for UI state and TanStack Query for backend/job state.
+- Backend: Python 3.12 + FastAPI; SQLAlchemy/Alembic persistence and a separate single-worker command.
+- Queue behavior must preserve priority+FIFO, lease/heartbeat, cooperative cancel, and idempotency-safe retry from ADR-0001.
+- Provider adapters must never add cross-provider routing/fallback or put real credentials in tests.
+- Use synthetic fixtures/fake provider servers in CI; live-provider tests remain manual and credential-local.
 - User-visible errors must be actionable and must never expose secrets.
 
 ## Review

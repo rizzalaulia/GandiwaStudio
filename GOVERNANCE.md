@@ -8,7 +8,7 @@ Rizzal Aulia Ramadhan (`@rizzalaulia`) is the initial maintainer and final decis
 
 ## Decision Process
 
-Small fixes proceed through pull-request review. Significant architecture, data-model, marketplace-rule, license, or MVP-scope changes require an issue and an Architecture Decision Record. Decisions prioritize user safety, source-backed compliance rules, maintainability, and the locked MVP.
+Small fixes proceed through pull-request review. Significant architecture, data-model, marketplace-rule, provider semantics, deployment target, queue, license, or MVP-scope changes require an issue and an Architecture Decision Record. Decisions prioritize user safety, source-backed compliance rules, maintainability, and the locked MVP. Accepted records are indexed in `docs/adr/README.md`.
 
 ## Becoming a Maintainer
 

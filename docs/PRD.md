@@ -1,15 +1,22 @@
 # Product Requirements Document — Gandiwa Studio
 
-**Versi:** 1.0  
-**Status:** Draft untuk persetujuan  
-**Platform MVP:** Web app privat, desktop-first  
+**Versi:** 1.0
+
+**Status:** Locked untuk implementasi
+
+**Platform MVP:** Web app privat, desktop-first, local-first
+
 **Pengguna MVP:** Single-user
+
+**Development:** `bejo1-oracle`
+
+**Production:** `bejo2-vnic`
 
 ## 1. Executive Summary
 
 Gandiwa Studio adalah workspace produksi aset Adobe Stock yang menggabungkan brief, generasi AI multi-provider, penyuntingan vector ringan, quality gate, metadata, dan ekspor proyek. Pengguna wajib memilih **Photo**, **Illustration**, atau **Vector** sebelum generasi. Pilihan ini menjadi kontrak workflow: menentukan model yang tersedia, format output, validator, editor, serta metadata yang digunakan.
 
-Produk memecahkan fragmentasi workflow tanpa membangun router AI baru. Pengguna memilih konektor dan model tujuan secara eksplisit: API model langsung seperti OpenAI, Anthropic, atau fal.ai; endpoint OpenAI-compatible; atau API 9Router melalui Tailscale. Frontend tidak menyimpan API key. Gandiwa hanya membentuk request, mengirimkannya ke endpoint pilihan, dan menerima hasil. Routing/fallback internal 9Router berada di luar tanggung jawab Gandiwa.
+Produk memecahkan fragmentasi workflow tanpa membangun router AI baru. Pengguna memilih konektor dan model tujuan secara eksplisit. Konektor wajib MVP adalah fal.ai dan API 9Router melalui Tailscale; konektor langsung lain dapat ditambahkan kemudian melalui interface yang sama. BYOK dikonfigurasi pemilik deployment pada backend secret file/environment; frontend tidak menerima, menyimpan, atau menampilkan API key. Gandiwa hanya membentuk request, mengirimkannya ke endpoint pilihan, dan menerima hasil. Routing/fallback internal 9Router berada di luar tanggung jawab Gandiwa.
 
 **Pembeda utama:** content-type-first workflow, konektor API yang dapat dipilih pengguna, preflight transparan, filesystem milik pengguna, dan feedback moderasi sebagai data perbaikan.
 
@@ -27,17 +34,19 @@ Produk memecahkan fragmentasi workflow tanpa membangun router AI baru. Pengguna 
 - Aplikasi web desktop-first.
 - Target utama: Chrome atau Edge terbaru pada Windows.
 - Akses folder lokal menggunakan File System Access API.
-- Backend dapat berjalan di laptop,gist server privat, atau VPS dalam tailnet.
-- Koneksi backend ke 9Router menggunakan URL Tailscale berakhiran `/v1`.
-- Online diperlukan untuk provider cloud; pengelolaan proyek dan edit SVG lokal dapat tetap digunakan selama sesi serta izin folder masih tersedia.
+- Browser memiliki directory handle dan menulis folder proyek lokal; backend tidak dapat menulis langsung ke filesystem pengguna.
+- Backend production berjalan pada `bejo2-vnic`; development/review berjalan pada `bejo1-oracle`.
+- Koneksi backend ke 9Router dapat menggunakan URL Tailscale berakhiran `/v1`.
+- Online diperlukan untuk provider cloud. Project lokal dan SVG yang sudah tersanitasi dapat tetap dibuka selama izin folder tersedia; import/preview SVG baru menunggu backend sanitization.
+- Tidak ada cloud sync bawaan; sinkronisasi folder oleh pengguna berada di luar scope dan kontrak produk.
 - Firefox/Safari bukan target penuh MVP karena keterbatasan File System Access API.
 
 ### Matriks tipe konten
 
 | Tipe | Format generasi MVP | Editor | Quality gate utama |
 |---|---|---|---|
-| Photo | PNG, JPEG | crop/resize sederhana atau buka eksternal | resolusi, noise, artefak, anatomi, legal |
-| Illustration | PNG, JPEG; SVG jika memang native vector | preview raster; editor SVG untuk hasil SVG | style, artefak, teks, anatomi, legal |
+| Photo | PNG, JPEG | inspect, konversi, dan resize eksplisit; retouch melalui editor eksternal | resolusi, noise, artefak, anatomi, legal |
+| Illustration | PNG, JPEG; SVG jika memang native vector | preparation raster atau editor SVG untuk hasil SVG | style, artefak, teks, anatomi, legal |
 | Vector | SVG | editor vector ringan | struktur SVG, raster tertanam, path, artboard, render parity |
 
 Ekspor AI/EPS tidak dijanjikan pada MVP. SVG dapat dibuka di Illustrator/Inkscape untuk konversi bila dibutuhkan.
@@ -46,15 +55,17 @@ Ekspor AI/EPS tidak dijanjikan pada MVP. SVG dapat dibuka di Illustrator/Inkscap
 
 ### Rekomendasi stack
 
-- **Frontend:** React + TypeScript + Vite.
-- **UI:** Tailwind CSS atau CSS variables berdasarkan `DESIGN.md`.
-- **Canvas SVG:** SVG DOM native dengan abstraction layer; gunakan library kecil hanya bila terbukti perlu.
-- **State:** Zustand.
-- **Backend:** Python + FastAPI.
-- **Database backend:** SQLite untuk konfigurasi, job, dan feedback; file aset tetap berada di folder proyek pengguna.
-- **Job execution:** proses lokal sederhana untuk MVP; antrean terpisah ditambahkan jika pekerjaan berat sudah nyata.
-- **Vector tools:** XML parser aman, SVGO, optional Inkscape CLI/VTracer di backend.
-- **AI:** konektor API menuju 9Router, OpenAI, Anthropic, fal.ai, dan OpenAI-compatible. Satu konektor serta model dipilih eksplisit oleh pengguna per job; Gandiwa tidak merutekan request antar-provider.
+- **Frontend:** React + TypeScript strict + Vite + React Router.
+- **UI:** Tailwind CSS + CSS variables berdasarkan `DESIGN.md`.
+- **State:** Zustand untuk UI state; TanStack Query untuk server/job state dan REST polling.
+- **Canvas SVG:** SVG DOM native dengan abstraction layer; library tambahan hanya bila fixture membuktikan perlu.
+- **Backend:** Python 3.12 + FastAPI + Uvicorn + Pydantic v2.
+- **Persistence:** SQLAlchemy 2 + Alembic + SQLite WAL; file kreatif tetap berada di folder proyek pengguna.
+- **Job execution:** SQLite durable queue dan satu proses worker terpisah; priority+FIFO, lease/heartbeat, cooperative cancellation, restart recovery, serta retry hanya untuk operasi aman/idempotent mengikuti [ADR-0001](adr/0001-sqlite-durable-job-queue.md).
+- **Media:** Pillow untuk raster; defusedxml + lxml untuk SVG/XML. SVGO/Inkscape/VTracer hanya ditambahkan bila dibuktikan perlu dan kompatibel ARM64.
+- **AI:** konektor API menuju 9Router dan fal.ai untuk MVP. Satu konektor serta model dipilih eksplisit per job; Gandiwa tidak merutekan request antar-provider.
+- **Testing:** Vitest + Testing Library + Playwright pada frontend; pytest + Ruff + mypy pada backend.
+- **Production:** Vite static build di host Nginx bejo2-vnic; FastAPI dan satu worker sebagai Docker Compose services. Kontrak rinci mengikuti `TECHNOLOGY.md` dan `DEPLOYMENT-BEJO2.md`.
 
 ```text
 Browser (React)
@@ -62,19 +73,23 @@ Browser (React)
   ├─ Content type selector
   ├─ Gallery / compare / editor ringan
   └─ Audit + metadata + export
-             │ HTTPS / private network
+             │ same-origin HTTPS
+             ▼
+Host Nginx (static UI + /api proxy)
+             │ loopback/internal
              ▼
 FastAPI backend
-  ├─ Provider registry dan secret vault
+  ├─ Session, provider registry, dan server-side secret
   ├─ Model capability registry
   ├─ Prompt/orchestration service
-  ├─ Job runner
+  ├─ SQLite durable queue
   ├─ Deterministic validators
   └─ Audit/metadata adapters
+             │
+             ▼
+Single worker process
        ├─ 9Router via Tailscale
-       ├─ OpenAI / Anthropic
-       ├─ fal.ai
-       └─ OpenAI-compatible
+       └─ fal.ai via internet
 ```
 
 ### Prinsip keamanan
@@ -116,11 +131,12 @@ FastAPI backend
 ### Epic B — Provider dan model
 
 **GS-004 — Mengelola koneksi provider**
-- Sebagai pengguna, saya ingin menghubungkan subscription AI yang tersedia.
+- Sebagai pengguna, saya ingin menggunakan konektor backend yang sudah dikonfigurasi pemilik deployment.
 - Acceptance Criteria:
-  - [ ] Mendukung 9Router, OpenAI, Anthropic, fal.ai, dan generic OpenAI-compatible.
-  - [ ] Test connection menampilkan status tanpa membocorkan key.
-  - [ ] Secret tidak tampil kembali secara utuh setelah disimpan.
+  - [ ] MVP mendukung 9Router dan fal.ai; konektor lain hanya dapat ditambahkan setelah dua vertical slice lulus dan mengikuti interface yang sama.
+  - [ ] Credential dipasang hanya melalui backend secret file/environment, bukan form atau storage browser.
+  - [ ] UI hanya menampilkan nama konektor, capability/model, status konfigurasi, dan hasil test connection tanpa key.
+  - [ ] API tidak pernah mengembalikan secret atau representasi yang dapat dipulihkan.
 - Priority: P0
 
 **GS-005 — Registry kemampuan model**
@@ -128,18 +144,18 @@ FastAPI backend
 - Acceptance Criteria:
   - [ ] Model memiliki capability text, vision, image-generation, SVG-text, atau audit.
   - [ ] Model tanpa capability terkait tidak dapat dipilih.
-  - [ ] Pengguna dapat menetapkan model default per peran.
+  - [ ] Pengguna dapat menyimpan preferensi connector/model sebagai prefill, tetapi setiap job tetap menampilkan dan mewajibkan konfirmasi eksplisit sebelum dispatch; preference tidak pernah memicu pemilihan atau fallback otomatis.
 - Priority: P0
 
 **GS-006 — Memanggil API 9Router sebagai konektor pilihan**
-- Sebagai pengguna, saya ingin memilih endpoint dan model/combo 9Router agar Gandiwa dapat memakai konfigurasi 9Router yang sudah saya miliki.
+- Sebagai pengguna, saya ingin memilih connector 9Router yang telah dikonfigurasi backend beserta model/combo agar Gandiwa dapat memakai konfigurasi 9Router yang sudah saya miliki tanpa menerima URL arbitrer dari browser.
 - Acceptance Criteria:
   - [ ] Backend dapat mengambil daftar model/combo yang dipublikasikan oleh `/v1/models`.
   - [ ] Pengguna memilih model/combo secara eksplisit sebelum menjalankan job.
   - [ ] Request memakai endpoint berakhiran `/v1` dan key server-side.
   - [ ] Gandiwa tidak mengatur urutan model, fallback, atau routing internal 9Router.
   - [ ] Error endpoint tercatat tanpa menampilkan secret.
-- Priority: P1
+- Priority: P0
 
 ### Epic C — Brief dan generasi
 
@@ -154,8 +170,11 @@ FastAPI backend
 **GS-008 — Menjalankan generation job**
 - Sebagai pengguna, saya ingin menghasilkan beberapa kandidat dari brief.
 - Acceptance Criteria:
-  - [ ] Job menyimpan provider, model, prompt, parameter, content type, format, waktu, dan status.
-  - [ ] Job dapat dibatalkan bila provider mendukungnya.
+  - [ ] API membuat ruleset snapshot dan job `queued`, lalu segera mengembalikan `job_id` tanpa menunggu provider.
+  - [ ] Job menyimpan provider, model, prompt, parameter, content type, format, priority, attempt, waktu, status, dan remote provider ID bila tersedia.
+  - [ ] Satu worker menjalankan satu job; job lain menunggu berdasarkan priority+FIFO.
+  - [ ] Job dapat diminta batal dan berhenti pada safe checkpoint; cancel diteruskan bila provider mendukungnya.
+  - [ ] Restart worker dapat memulihkan expired lease tanpa redispatch generation berbayar secara buta.
   - [ ] Hasil gagal tidak ditandai sebagai kandidat valid.
 - Priority: P0
 
@@ -167,7 +186,17 @@ FastAPI backend
   - [ ] Satu hasil dapat ditandai sebagai master tanpa menghapus kandidat lain.
 - Priority: P0
 
-### Epic D — Penyuntingan
+### Epic D — Penyuntingan dan persiapan
+
+**GS-010A — Persiapan raster**
+- Sebagai pengguna, saya ingin menyiapkan raster submission tanpa merusak master.
+- Acceptance Criteria:
+  - [ ] PNG/JPEG working/master dapat diperiksa dan dikonversi menjadi JPEG submission revision.
+  - [ ] Resize hanya berjalan setelah aksi eksplisit dan tidak meng-upscale file di bawah 4 MP untuk menyamarkan kekurangan kualitas.
+  - [ ] Quality setting, dimensions, megapixels, alpha handling, dan color conversion dicatat pada revision.
+  - [ ] Source/master tidak ditimpa; perubahan checksum membuat audit/approval lama stale.
+  - [ ] Retouching kompleks diarahkan ke editor eksternal.
+- Priority: P0
 
 **GS-010 — Editor SVG ringan**
 - Sebagai pengguna, saya ingin memperbaiki vector tanpa editor penuh.
@@ -255,14 +284,18 @@ FastAPI backend
 - Log wajib meredaksi Authorization header dan API key.
 - SVG disanitasi sebelum dirender.
 - CORS dibatasi ke origin Gandiwa.
-- Deployment non-local wajib memakai HTTPS atau akses privat Tailscale yang sesuai.
+- Production memakai same-origin HTTPS; Tailscale/CORS tidak menggantikan secure session authentication dan CSRF protection.
+- API production hanya diekspos melalui Nginx, bukan port container publik.
 - Tidak ada upload otomatis ke Adobe Stock pada MVP.
 
 ### Reliability
 
 - Source asli tidak ditimpa.
 - Penulisan manifest menggunakan temp file lalu atomic replace bila filesystem mendukung.
-- Job memiliki status queued, running, succeeded, failed, atau cancelled.
+- Job memiliki state `queued`, `running`, `waiting_provider`, `processing`, `needs_review`, `succeeded`, `failed`, atau `cancelled`.
+- Antrean durable, lease/heartbeat, dan remote provider ID mencegah job hilang atau dispatch ganda setelah restart.
+- Browser memantau status dengan REST polling; job backend tetap berjalan bila tab ditutup.
+- Artifact sukses tetap sementara di backend sampai browser mengambilnya atau retention period habis.
 - Project tetap dapat dibuka bila backend AI sedang mati; fitur AI ditandai unavailable.
 
 ### Accessibility
@@ -316,7 +349,7 @@ Buka/pilih folder
 
 - editor Bézier/node sekelas Illustrator;
 - training/fine-tuning model;
-- model inference lokal berat;
+- seluruh model inference AI lokal;
 - kolaborasi atau multi-user;
 - cloud sync bawaan;
 - pembayaran/subscription management;
@@ -352,7 +385,7 @@ MVP selesai jika satu pengguna dapat:
 
 - membuat dan membuka kembali proyek pada folder laptop;
 - memilih content type dan creation method sebelum generate;
-- memilih endpoint/model secara eksplisit;
+- memilih connector backend yang telah dikonfigurasi dan model secara eksplisit;
 - menjalankan jalur raster melalui fal.ai dan jalur reasoning/SVG/metadata melalui 9Router;
 - menghasilkan working artifact PNG/JPEG/SVG;
 - memilih master dan mengedit SVG ringan;
@@ -368,7 +401,7 @@ Seluruh acceptance criteria P0 dan fixture minimum `ADOBE-RULESET.md` harus lulu
 
 ## 12. MVP LOCK
 
-**Baseline:** `mvp-1.0` — terkunci. Implementasi wajib mengikuti ruang lingkup berikut:
+**Baseline:** `mvp-1.0` — terkunci. Urutan implementasi dan acceptance gate wajib mengikuti [`DEVELOPMENT-SEQUENCE.md`](DEVELOPMENT-SEQUENCE.md). Implementasi wajib mengikuti ruang lingkup berikut:
 
 - single-user, Chrome/Edge desktop-first;
 - browser sebagai pemilik directory handle; backend hanya memproses upload sementara dan mengembalikan artifact;
@@ -376,6 +409,6 @@ Seluruh acceptance criteria P0 dan fixture minimum `ADOBE-RULESET.md` harus lulu
 - dua vertical slice: raster sampai JPEG Adobe-ready dan vector sampai SVG Adobe-ready;
 - editor SVG ringan saja;
 - upload Adobe Stock manual;
-- manifest proyek sebagai source of truth portabel; SQLite sebagai cache/index/runtime state.
+- manifest proyek sebagai source of truth kreatif portabel; SQLite menyimpan cache/index serta state operasional durable, dan hanya bagian cache/index yang boleh dibangun ulang dari manifest.
 
 Out-of-scope pada §8 tidak boleh dimasukkan tanpa change request tertulis dan revisi baseline. Peningkatan provider tambahan boleh dilakukan setelah DoD dua vertical slice lulus dan tidak boleh mengubah kontrak konektor.

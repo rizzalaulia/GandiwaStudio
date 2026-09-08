@@ -16,4 +16,8 @@ Never commit API keys, OAuth tokens, cookies, private URLs, generated customer a
 
 ## Security Boundary
 
-Gandiwa is not a legal clearance service and does not guarantee acceptance by any marketplace. AI-based legal review is risk screening only.
+- The browser owns local project directory handles; the backend accepts only temporary required inputs and cannot write directly to that directory.
+- Provider credentials are configured only in backend secret files/environment; the browser has no key-entry form and never receives stored key material. Secure sessions are backend-owned. Tailscale and CORS do not replace application authentication or CSRF protection.
+- SVG is hostile input until sanitized; production uses same-origin HTTPS and exposes the API only through Nginx.
+- Retry must not duplicate a paid generation request when provider acceptance is unknown.
+- Gandiwa is not a legal clearance service and does not guarantee acceptance by any marketplace. AI-based legal review is risk screening only.

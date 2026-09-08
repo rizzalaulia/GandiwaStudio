@@ -26,6 +26,7 @@ erDiagram
     CONTENT_TYPE ||--o{ AUDIT_RULE : activates
 
     PROVIDER ||--o{ MODEL : exposes
+    PROVIDER ||--o{ GENERATION_JOB : selected_for
     MODEL ||--o{ MODEL_CAPABILITY : has
     MODEL ||--o{ GENERATION_JOB : executes
     RULESET ||--o{ AUDIT_RULE : contains
@@ -35,6 +36,7 @@ erDiagram
 
     GENERATION_JOB ||--o{ ASSET : produces
     GENERATION_JOB ||--o{ JOB_EVENT : logs
+    GENERATION_JOB ||--o{ TEMPORARY_ARTIFACT : stages
     GENERATION_JOB }o--o| PROMPT_TEMPLATE : applies
 
     ASSET ||--o{ ASSET_REVISION : versions
@@ -139,6 +141,7 @@ erDiagram
       uuid generation_batch_id FK
       string content_type_code FK
       string creation_method
+      uuid provider_id FK
       uuid model_id FK
       uuid prompt_template_id FK
       string generation_format
@@ -152,7 +155,17 @@ erDiagram
       string model_revision
       string seed
       string status
+      integer priority
+      integer attempt_count
+      string remote_job_id
+      string lease_owner
+      datetime lease_expires_at
+      datetime heartbeat_at
+      datetime cancel_requested_at
       string error_code
+      text redacted_error
+      json result_manifest
+      datetime created_at
       datetime started_at
       datetime completed_at
     }
@@ -164,6 +177,20 @@ erDiagram
       string event_type
       text redacted_message
       datetime created_at
+    }
+
+    TEMPORARY_ARTIFACT {
+      uuid id PK
+      uuid generation_job_id FK
+      string storage_path
+      string media_type
+      integer size_bytes
+      string sha256
+      string status
+      datetime created_at
+      datetime expires_at
+      datetime retrieved_at
+      datetime deleted_at
     }
 
     ASSET {
@@ -203,7 +230,7 @@ erDiagram
 
     AUDIT_RUN {
       uuid id PK
-      uuid asset_id FK
+      uuid asset_revision_id FK
       string status
       string ruleset_version
       uuid ai_model_id FK
@@ -296,7 +323,13 @@ erDiagram
 
 ### `GENERATION_JOB.status`
 
-`queued`, `running`, `succeeded`, `failed`, `cancelled`.
+`queued`, `running`, `waiting_provider`, `processing`, `needs_review`, `succeeded`, `failed`, `cancelled`.
+
+Antrean memakai prioritas tertinggi lalu FIFO berdasarkan `created_at`. Job aktif memiliki lease/heartbeat. `remote_job_id` wajib disimpan segera setelah provider menerimanya agar recovery tidak mendispatch generation request berbayar dua kali. `needs_review` digunakan ketika penerimaan provider tidak dapat dipastikan dan retry otomatis berisiko menggandakan biaya.
+
+### `TEMPORARY_ARTIFACT.status`
+
+`available`, `retrieved`, `expired`, `deleted`. Artifact backend bersifat sementara sampai browser mengambil dan menulisnya ke folder proyek atau retention period berakhir.
 
 ### `ASSET.role`
 
@@ -330,8 +363,14 @@ erDiagram
 12. Penghapusan provider tidak menghapus riwayat job; provider dinonaktifkan atau disoft-delete.
 13. Audit AI menyimpan model yang digunakan agar hasil dapat ditelusuri.
 14. Hash digunakan untuk integritas dan deteksi duplikasi; bukan sebagai satu-satunya similarity metric.
-15. Manifest proyek adalah source of truth portabel; SQLite backend hanya cache/index/runtime state dan dapat dibangun ulang dari manifest.
+15. Manifest proyek adalah source of truth kreatif portabel. Cache/index kreatif pada SQLite dapat dibangun ulang dari manifest, tetapi konfigurasi backend, antrean/job, event, moderation feedback, dan artifact yang belum diambil adalah state durable yang wajib dicadangkan dan tidak dapat dipulihkan hanya dari manifest.
 16. Implementasi ruleset dan fixture mengacu pada `ADOBE-RULESET.md`.
+17. Claim job menggunakan transaksi singkat; transaksi database tidak ditahan selama menunggu provider.
+18. Worker concurrency MVP adalah satu; expired lease masuk recovery dan tidak boleh menyebabkan redispatch buta.
+19. Retry hanya untuk operasi yang terbukti aman/idempotent; hasil dispatch yang tidak diketahui membutuhkan review.
+20. Artifact backend memiliki checksum dan expiry; cleanup tidak boleh menghapus artifact milik job aktif.
+21. SQLite production hanya berada pada local disk bejo2-vnic dengan WAL, foreign keys, busy timeout, dan backup konsisten; bukan pada folder sinkronisasi/network filesystem.
+22. `provider_id` (configured connector) dan `model_id` wajib dibekukan per job; preference/UI prefill tidak boleh mengganti pilihan job secara otomatis.
 
 ## Struktur Folder Proyek
 

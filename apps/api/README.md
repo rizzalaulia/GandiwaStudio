@@ -1,3 +1,22 @@
-# Processing API
+# Processing API and Worker
 
-Planned FastAPI service for authentication, connector calls, temporary artifact processing, sanitization, ruleset execution, and redacted job logs. It must never write directly to a remote user's browser-owned folder.
+Planned Python 3.12 FastAPI application with a separate worker command.
+
+## API Responsibilities
+
+- secure single-user session and CSRF posture;
+- provider/capability configuration from backend secret file/environment only;
+- immutable ruleset snapshots;
+- enqueue and return `job_id` without blocking on provider work;
+- status, cancellation request, preflight, artifact, and export-validation endpoints;
+- redacted structured logs.
+
+## Worker Responsibilities
+
+- one active job using SQLite priority+FIFO queue;
+- lease, heartbeat, recovery, `needs_review` for unknown dispatch, and cooperative cancellation;
+- exact user-selected 9Router/fal.ai calls;
+- safe/idempotent retry only;
+- sanitization, audit, conversion, and temporary artifact staging.
+
+The backend never writes directly to a browser-owned project folder. Production API/worker run as separate Docker Compose services on bejo2-vnic and are exposed only through host Nginx.

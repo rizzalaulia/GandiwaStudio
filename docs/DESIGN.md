@@ -194,9 +194,21 @@ Temuan dipisah antara **Deterministic Check**, **AI Review**, dan **Human Confir
 
 Panel export menampilkan generation, working/master, dan submission format secara terpisah. Tombol export submission dinonaktifkan sampai revisi terkini lulus blocking checks, metadata/disclosure lengkap, dan disetujui pengguna. Badge `Adobe-ready` wajib disertai keterangan bahwa status bukan jaminan penerimaan moderator.
 
-### Job Status
+### Job Queue and Status
 
-Job berjalan tetap terlihat saat pengguna berpindah panel. Tampilkan tahap, durasi, provider, tombol cancel bila didukung, dan error yang sudah direduksi tanpa secret.
+Job berjalan tetap terlihat saat pengguna berpindah panel. Queue panel menampilkan urutan, status, tahap, durasi, provider/model, dan tindakan yang sah.
+
+Status ramah pengguna memetakan state teknis berikut:
+
+- `queued`: posisi antrean dan menunggu worker;
+- `running`: worker telah mengambil job;
+- `waiting_provider`: provider sedang mengerjakan request;
+- `processing`: Gandiwa mengunduh, memvalidasi, atau menyiapkan artifact;
+- `needs_review`: hasil dispatch provider tidak pasti; retry otomatis diblokir untuk mencegah biaya ganda;
+- `succeeded`: artifact siap diambil browser;
+- `failed` atau `cancelled`: terminal state dengan alasan/tindakan berikutnya.
+
+Tampilkan tombol cancel sebagai request, bukan janji penghentian instan. Error wajib sudah direduksi tanpa secret. Jika browser dibuka kembali setelah job selesai, tampilkan **Result ready to save** beserta waktu kedaluwarsa artifact. Job recovery/unknown dispatch tidak boleh ditampilkan sebagai gagal biasa; UI memperingatkan risiko dispatch ganda dan membutuhkan keputusan pengguna.
 
 ## Do's and Don'ts
 
@@ -209,6 +221,8 @@ Job berjalan tetap terlihat saat pengguna berpindah panel. Tampilkan tahap, dura
 - Gunakan progressive disclosure untuk parameter lanjutan.
 - Pastikan fokus keyboard terlihat jelas.
 - Sediakan empty state yang mengarahkan tindakan berikutnya.
+- Tampilkan backend connectivity nyata, jumlah antrean, dan status worker tanpa status palsu.
+- Jelaskan bahwa proyek tersimpan pada folder lokal pengguna dan sinkronisasi antarperangkat bukan fitur aplikasi.
 
 ### Don't
 

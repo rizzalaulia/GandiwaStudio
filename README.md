@@ -11,28 +11,31 @@
 
 ## Vision
 
-Gandiwa Studio helps a contributor move from brief to an audited export package. The user explicitly selects `Photo`, `Illustration`, or `Vector`, the API endpoint, and the model. Gandiwa is an API client/orchestrator—not an AI router. A selected 9Router endpoint remains responsible for its own routing behavior.
+Gandiwa Studio helps a contributor move from brief to an audited export package. The user explicitly selects `Photo`, `Illustration`, or `Vector`, a backend-configured connector, and its model. Gandiwa is an API client/orchestrator—not an AI router. A selected 9Router endpoint remains responsible for its own routing behavior.
 
 ## Locked MVP
 
-- Single-user desktop-first web app for current Chrome/Edge.
-- Local project folders through the File System Access API.
-- Explicit content type, creation method, endpoint, and model selection.
+- Single-user, local-first, desktop browser app for current Chrome/Edge.
+- Browser-owned local project folders through File System Access API; no built-in cloud sync.
+- Explicit content type, creation method, connector, and model selection; no Gandiwa-owned routing/fallback.
 - Required connectors: 9Router and fal.ai.
+- SQLite durable queue with one separate worker, priority+FIFO, lease/heartbeat, recovery, and REST polling.
 - Raster path to Adobe-ready JPEG and vector path to Adobe-ready SVG.
 - Lightweight SVG editing, deterministic preflight, AI risk screening, metadata, approval, and export package.
+- Development on `bejo1-oracle`; production on ARM64 `bejo2-vnic` using host Nginx + Docker Compose.
 - Manual Adobe Stock upload.
 
-See [PRD](docs/PRD.md), [BRD](docs/BRD.md), [ERD](docs/ERD.md), [Design system](docs/DESIGN.md), and [Adobe ruleset](docs/ADOBE-RULESET.md).
+Core contracts: [development sequence](docs/DEVELOPMENT-SEQUENCE.md), [technology](docs/TECHNOLOGY.md), [architecture](docs/ARCHITECTURE.md), [bejo2 deployment](docs/DEPLOYMENT-BEJO2.md), [operations](docs/OPERATIONS.md), [PRD](docs/PRD.md), [BRD](docs/BRD.md), [ERD](docs/ERD.md), [design system](docs/DESIGN.md), and [Adobe ruleset](docs/ADOBE-RULESET.md).
 
 ## Planned Architecture
 
 ```text
-apps/web       React + TypeScript browser workspace
-apps/api       FastAPI processing and provider connectors
+apps/web       React + TypeScript + Vite browser workspace
+apps/api       Python 3.12 FastAPI API + separate worker command
 packages/*     Shared schemas, rules, provider contracts, and UI
 project folder Portable manifest and user-owned artifacts
-SQLite         Rebuildable cache/index/runtime state
+SQLite         WAL cache/index + durable runtime queue
+production     Static frontend + host Nginx + Docker Compose on bejo2-vnic
 ```
 
 The directories are contracts for future implementation and intentionally contain no fabricated application code.
@@ -52,10 +55,13 @@ scripts/               Repository verification utilities
 
 Implementation has not started. Before adding code, read:
 
-1. [CONTRIBUTING.md](CONTRIBUTING.md)
-2. [docs/PRD.md](docs/PRD.md)
-3. [docs/ADOBE-RULESET.md](docs/ADOBE-RULESET.md)
-4. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+1. [Locked development sequence](docs/DEVELOPMENT-SEQUENCE.md)
+2. [Technology contract](docs/TECHNOLOGY.md)
+3. [Architecture](docs/ARCHITECTURE.md)
+4. [CONTRIBUTING.md](CONTRIBUTING.md)
+5. [PRD](docs/PRD.md)
+6. [Adobe ruleset](docs/ADOBE-RULESET.md)
+7. [bejo2 deployment contract](docs/DEPLOYMENT-BEJO2.md)
 
 Run the current documentation quality gate:
 

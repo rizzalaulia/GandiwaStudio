@@ -10,6 +10,12 @@ REQUIRED = [
     "SECURITY.md", "SUPPORT.md", "GOVERNANCE.md", "CHANGELOG.md",
     "docs/BRD.md", "docs/PRD.md", "docs/ERD.md", "docs/DESIGN.md",
     "docs/ADOBE-RULESET.md", "docs/ARCHITECTURE.md",
+    "docs/DEVELOPMENT-SEQUENCE.md", "docs/TECHNOLOGY.md",
+    "docs/DEPLOYMENT-BEJO2.md", "docs/OPERATIONS.md",
+    "docs/adr/0001-sqlite-durable-job-queue.md",
+    "docs/adr/0002-local-first-browser-filesystem.md",
+    "docs/adr/0003-bejo2-production-topology.md",
+    ".env.example", ".env.production.example",
 ]
 errors = []
 for item in REQUIRED:
