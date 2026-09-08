@@ -12,7 +12,7 @@
   "scripts": {
     "build": "corepack pnpm -r --if-present build && uv build --project apps/api",
     "check": "corepack pnpm lint && corepack pnpm typecheck && corepack pnpm test && corepack pnpm build && corepack pnpm verify",
-    "test": "corepack pnpm -r --if-present test && uv run --project apps/api pytest tests/scaffold",
+    "test": "corepack pnpm -r --if-present test && uv run --project apps/api pytest",
     "typecheck": "corepack pnpm -r --if-present typecheck && uv run --project apps/api mypy apps/api/src",
     "lint": "corepack pnpm -r --if-present lint && uv run --project apps/api ruff check apps/api tests/scaffold",
     "verify": "python3 scripts/verify_repository.py"
