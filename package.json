@@ -15,6 +15,8 @@
     "test": "corepack pnpm -r --if-present test && uv run --project apps/api pytest",
     "typecheck": "corepack pnpm -r --if-present typecheck && uv run --project apps/api mypy apps/api/src",
     "lint": "corepack pnpm -r --if-present lint && uv run --project apps/api ruff check apps/api tests/scaffold",
+    "migrate": "uv run --project apps/api alembic -c apps/api/alembic.ini upgrade head",
+    "migration:current": "uv run --project apps/api alembic -c apps/api/alembic.ini current",
     "verify": "python3 scripts/verify_repository.py"
   }
 }

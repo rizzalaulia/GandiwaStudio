@@ -1,6 +1,6 @@
 # Processing API and Worker
 
-Python 3.12 FastAPI package foundation. The process probes from Issue #3 are implemented; the separate worker command remains absent until Issue #5 is implemented with tests.
+Python 3.12 FastAPI package foundation. The process probes from Issue #3 and the SQLite/Alembic foundation from Issue #4 are implemented; the separate worker command remains absent until Issue #5 is implemented with tests.
 
 ## Implemented Process Probes
 
@@ -10,6 +10,16 @@ Python 3.12 FastAPI package foundation. The process probes from Issue #3 are imp
 - Unavailable responses expose boolean check names only—never paths, database URLs, secrets, or raw exceptions.
 
 Issue #4 owns the actual SQLAlchemy models, Alembic migration, and SQLite runtime configuration; Issue #3 only verifies their expected operational contract.
+
+## SQLite and Alembic Foundation
+
+- SQLAlchemy 2 typed declarative models with `DeclarativeBase`.
+- `GenerationJob` durable queue model matching the ADR-0001 contract.
+- Alembic migration `0001` creates the queue schema with claim index.
+- SQLite runtime: `foreign_keys=ON`, WAL, configurable busy timeout.
+- Migration is an explicit command (`corepack pnpm migrate`), never automatic on startup.
+- `alembic check` confirms model-migration synchronization.
+- Settings reject non-SQLite URLs and invalid busy timeout values.
 
 ## API Responsibilities
 

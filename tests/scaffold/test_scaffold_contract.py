@@ -24,7 +24,7 @@ class ScaffoldContractTests(unittest.TestCase):
         self.assertRegex(str(package.get("packageManager", "")), r"^pnpm@\d+\.\d+\.\d+$")
         scripts = package.get("scripts", {})
         self.assertIsInstance(scripts, dict)
-        for command in ("build", "check", "test", "typecheck"):
+        for command in ("build", "check", "migrate", "test", "typecheck"):
             self.assertIn(command, scripts)
             self.assertNotRegex(
                 scripts[command],
