@@ -9,9 +9,16 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import FastAPI, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from gandiwa_api.config import Settings
+from gandiwa_api.security.artifacts import build_artifact_download_response
+from gandiwa_api.security.csrf import (
+    CSRFProtectionMiddleware,
+    generate_csrf_token,
+    set_csrf_cookie,
+)
+from gandiwa_api.security.providers import ProviderInfo, get_configured_providers
 
 try:
     APP_VERSION = version("gandiwa-api")
@@ -24,6 +31,17 @@ EXPECTED_SCHEMA_REVISION = "0001"
 SQLITE_URL_PREFIX = "sqlite:///"
 
 app = FastAPI(title="Gandiwa Studio API", version=APP_VERSION)
+
+app.add_middleware(
+    CSRFProtectionMiddleware,
+    exempt_paths={
+        "/api/v1/health",
+        "/api/v1/ready",
+        "/api/v1/auth/csrf",
+        "/api/v1/providers",
+    },
+)
+
 
 
 def _sqlite_path(database_url: str) -> Path | None:
@@ -136,3 +154,28 @@ def get_ready() -> JSONResponse:
             "checks": checks,
         },
     )
+
+
+@app.get("/api/v1/auth/csrf")
+def get_csrf_token() -> JSONResponse:
+    """Provide a signed CSRF token and set the matching client cookie."""
+    current_settings = Settings()
+    token = generate_csrf_token(current_settings.SESSION_SECRET)
+    response = JSONResponse(content={"csrf_token": token})
+    set_csrf_cookie(response, token, secure=current_settings.SECURE_COOKIES)
+    return response
+
+
+@app.get("/api/v1/providers")
+def list_providers() -> list[ProviderInfo]:
+    """List available AI connectors configured on backend without exposing secrets."""
+    current_settings = Settings()
+    return get_configured_providers(current_settings)
+
+
+@app.get("/api/v1/artifacts/{filename}/download")
+def download_artifact(filename: str) -> FileResponse:
+    """Safely download an artifact with Content-Disposition: attachment and nosniff."""
+    current_settings = Settings()
+    return build_artifact_download_response(filename, current_settings.ARTIFACT_DIR)
+
