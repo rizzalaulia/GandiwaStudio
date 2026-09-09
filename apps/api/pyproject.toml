@@ -22,6 +22,9 @@ dependencies = [
   "uvicorn==0.52.4",
 ]
 
+[project.scripts]
+gandiwa-worker = "gandiwa_api.worker:main"
+
 [dependency-groups]
 dev = [
   "mypy==2.3.1",

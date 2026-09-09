@@ -24,7 +24,7 @@ class ScaffoldContractTests(unittest.TestCase):
         self.assertRegex(str(package.get("packageManager", "")), r"^pnpm@\d+\.\d+\.\d+$")
         scripts = package.get("scripts", {})
         self.assertIsInstance(scripts, dict)
-        for command in ("build", "check", "migrate", "test", "typecheck"):
+        for command in ("build", "check", "migrate", "test", "typecheck", "worker"):
             self.assertIn(command, scripts)
             self.assertNotRegex(
                 scripts[command],
@@ -37,6 +37,13 @@ class ScaffoldContractTests(unittest.TestCase):
         self.assertRegex(workspace, r"(?m)^\s*- ['\"]?packages/\*['\"]?$")
         self.assertTrue((ROOT / "pnpm-lock.yaml").is_file(), "missing pnpm-lock.yaml")
 
+    def test_frontend_dev_server_proxies_same_origin_api_requests(self) -> None:
+        vite_config = (ROOT / "apps/web/vite.config.ts").read_text(encoding="utf-8")
+
+        self.assertIn("server:", vite_config)
+        self.assertRegex(vite_config, r"['\"]\/api['\"]\s*:")
+        self.assertIn("127.0.0.1:8000", vite_config)
+
     def test_frontend_is_a_private_react_vite_typescript_workspace(self) -> None:
         package = self.load_json("apps/web/package.json")
 
@@ -44,6 +51,8 @@ class ScaffoldContractTests(unittest.TestCase):
         self.assertTrue(package.get("private"))
         dependencies = package.get("dependencies", {})
         dev_dependencies = package.get("devDependencies", {})
+        scripts = package.get("scripts", {})
+        self.assertEqual(scripts.get("dev"), "vite")
         self.assertIn("react", dependencies)
         self.assertIn("react-dom", dependencies)
         self.assertIn("vite", dev_dependencies)
@@ -78,6 +87,14 @@ class ScaffoldContractTests(unittest.TestCase):
         self.assertRegex(pyproject, r'(?m)^\s*"fastapi[^"]*",?$')
         self.assertTrue((ROOT / "apps/api/uv.lock").is_file(), "missing apps/api/uv.lock")
         self.assertTrue((ROOT / "apps/api/src/gandiwa_api/__init__.py").is_file())
+
+    def test_environment_templates_match_runtime_database_and_worker_settings(self) -> None:
+        for template in (".env.example", ".env.production.example"):
+            with self.subTest(template=template):
+                text = (ROOT / template).read_text(encoding="utf-8")
+                self.assertIn("GANDIWA_DATABASE_BUSY_TIMEOUT_MS=", text)
+                self.assertIn("GANDIWA_WORKER_HEARTBEAT_STALE_SECONDS=", text)
+                self.assertNotIn("GANDIWA_SQLITE_BUSY_TIMEOUT_MS=", text)
 
     def test_repository_documents_reproducible_setup_without_secrets(self) -> None:
         readme = (ROOT / "README.md").read_text(encoding="utf-8")

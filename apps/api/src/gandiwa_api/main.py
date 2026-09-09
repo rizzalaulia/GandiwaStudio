@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import sqlite3
 import tempfile
+from datetime import UTC, datetime, timedelta
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+from typing import Literal, TypedDict, cast
 from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Request, status
@@ -31,7 +33,16 @@ except PackageNotFoundError:  # pragma: no cover - editable and wheel installs p
 # Application-owned contract: Issue #4 must make the Alembic head match this value.
 # Never move this value to environment configuration, which could approve a stale schema.
 EXPECTED_SCHEMA_REVISION = "0001"
+MVP_VERSION = "mvp-1.0"
 SQLITE_URL_PREFIX = "sqlite:///"
+
+WorkerPublicStatus = Literal["idle", "running", "stopped", "unavailable"]
+
+
+class WorkerStatusPayload(TypedDict):
+    status: WorkerPublicStatus
+    heartbeat_at: str | None
+
 
 app = FastAPI(title="Gandiwa Studio API", version=APP_VERSION)
 
@@ -158,6 +169,80 @@ def get_ready() -> JSONResponse:
         content={
             "status": "ready" if is_ready else "unavailable",
             "checks": checks,
+        },
+    )
+
+
+def _read_worker_state(
+    database_url: str,
+    stale_after_seconds: int,
+) -> WorkerStatusPayload:
+    """Read worker state and fail closed when a running heartbeat is stale."""
+    database_path = _sqlite_path(database_url)
+    unavailable = WorkerStatusPayload(status="unavailable", heartbeat_at=None)
+    if database_path is None:
+        return unavailable
+    try:
+        with _open_existing_database(database_path) as connection:
+            row = connection.execute(
+                "SELECT status, heartbeat_at FROM worker_state WHERE id = 1"
+            ).fetchone()
+    except (OSError, sqlite3.Error):
+        return unavailable
+    if row is None:
+        return unavailable
+
+    raw_status = str(row[0])
+    if raw_status not in {"idle", "running", "stopped"}:
+        return unavailable
+    worker_status = cast(WorkerPublicStatus, raw_status)
+    heartbeat_text = str(row[1]) if row[1] is not None else None
+    if worker_status == "running":
+        try:
+            if heartbeat_text is None:
+                return unavailable
+            heartbeat = datetime.fromisoformat(heartbeat_text)
+            if heartbeat.tzinfo is None:
+                heartbeat = heartbeat.replace(tzinfo=UTC)
+            stale_before = datetime.now(UTC) - timedelta(seconds=stale_after_seconds)
+            if heartbeat.astimezone(UTC) < stale_before:
+                return {"status": "unavailable", "heartbeat_at": heartbeat_text}
+        except ValueError:
+            return unavailable
+
+    return {"status": worker_status, "heartbeat_at": heartbeat_text}
+
+
+@app.get("/api/v1/status")
+def get_status() -> JSONResponse:
+    """Return the minimal public runtime contract needed by the first UI shell."""
+    current_settings = Settings()
+    health = get_health()
+    worker = _read_worker_state(
+        current_settings.DATABASE_URL,
+        current_settings.WORKER_HEARTBEAT_STALE_SECONDS,
+    )
+    database_ok, migration_ok, queue_ok = _check_database(
+        current_settings.DATABASE_URL,
+        EXPECTED_SCHEMA_REVISION,
+    )
+    ready_checks = {
+        "database": database_ok,
+        "migration": migration_ok,
+        "queue": queue_ok,
+        "artifacts_dir": _check_artifact_directory(current_settings.ARTIFACT_DIR),
+    }
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={
+            "version": health["version"],
+            "mvp_version": MVP_VERSION,
+            "backend": {
+                "health": health["status"],
+                "ready": all(ready_checks.values()),
+                "checks": ready_checks,
+            },
+            "worker": worker,
         },
     )
 

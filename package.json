@@ -17,6 +17,7 @@
     "lint": "corepack pnpm -r --if-present lint && uv run --project apps/api ruff check apps/api tests/scaffold",
     "migrate": "uv run --project apps/api alembic -c apps/api/alembic.ini upgrade head",
     "migration:current": "uv run --project apps/api alembic -c apps/api/alembic.ini current",
+    "worker": "uv run --project apps/api gandiwa-worker",
     "verify": "python3 scripts/verify_repository.py"
   }
 }

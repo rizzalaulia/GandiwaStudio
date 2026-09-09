@@ -5,6 +5,9 @@ All notable changes to this project will be documented here. The format follows 
 ## [Unreleased]
 
 ### Added
+- Stage 1 Gandiwa shell backed by `GET /api/v1/status`, with non-sensitive backend readiness and fail-closed worker-heartbeat state.
+- Separate packaged `gandiwa-worker` command with SIGINT/SIGTERM shutdown and observable SQLite heartbeat state.
+- Same-origin Vite `/api` development proxy and runtime status contract/runbook.
 - Reproducible pnpm monorepo and Python 3.12/FastAPI package foundations.
 - Strict TypeScript/Vite web shell with Vitest, Testing Library, ESLint, and Tailwind.
 - Exact npm/PyPI dependency manifests plus `pnpm-lock.yaml` and `apps/api/uv.lock`.

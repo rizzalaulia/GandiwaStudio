@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import signal
 import threading
 from datetime import UTC, datetime
+from types import FrameType
 from typing import Literal
 
 from sqlalchemy import text
@@ -98,3 +100,20 @@ class Worker:
             logger.exception("Unable to update worker heartbeat")
         finally:
             engine.dispose()
+
+
+def main() -> None:
+    """Run one worker process until SIGINT or SIGTERM requests shutdown."""
+    worker = Worker(Settings())
+    shutdown_requested = threading.Event()
+
+    def request_shutdown(_signum: int, _frame: FrameType | None) -> None:
+        shutdown_requested.set()
+
+    signal.signal(signal.SIGINT, request_shutdown)
+    signal.signal(signal.SIGTERM, request_shutdown)
+    worker.start()
+    try:
+        shutdown_requested.wait()
+    finally:
+        worker.stop()
