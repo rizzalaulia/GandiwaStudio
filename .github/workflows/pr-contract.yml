@@ -1,0 +1,37 @@
+name: Pull request contract
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  issue-branch-contract:
+    name: Issue branch and closing reference
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # No secret is available in this workflow. Checking out the PR head lets
+        # the contract validate the policy code introduced by this same PR.
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Validate the branch maps to exactly one closing reference
+        env:
+          PR_BRANCH: ${{ github.event.pull_request.head.ref }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          python3 - <<'PY'
+          import importlib.util
+          import os
+          from pathlib import Path
+
+          path = Path("scripts/kanban_flow.py")
+          spec = importlib.util.spec_from_file_location("kanban_flow", path)
+          assert spec is not None and spec.loader is not None
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          module.validate_pr_reference(os.environ["PR_BRANCH"], os.environ.get("PR_BODY", ""))
+          PY

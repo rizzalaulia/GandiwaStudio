@@ -1,0 +1,59 @@
+name: Kanban flow
+
+on:
+  issues:
+    types: [opened, closed, reopened, labeled, unlabeled]
+  push:
+    branches: [main]
+  workflow_run:
+    workflows: [CI, Pull request contract]
+    types: [completed]
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Write calculated status changes to Project #2"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gandiwa-kanban-flow
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    name: Reconcile Project #2
+    # workflow_run has access to secrets. A fork must never be able to trigger
+    # a token-bearing run, even though this workflow executes only main code.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the dedicated Project token
+        env:
+          GANDIWA_PROJECT_TOKEN: ${{ secrets.GANDIWA_PROJECT_TOKEN }}
+        run: |
+          if [ -z "${GANDIWA_PROJECT_TOKEN}" ]; then
+            echo "::error::Missing GANDIWA_PROJECT_TOKEN. See docs/KANBAN-AUTOMATION.md."
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - name: Preview deterministic kanban status
+        env:
+          GH_TOKEN: ${{ secrets.GANDIWA_PROJECT_TOKEN }}
+          PUSHED_REF: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+        run: python3 scripts/kanban_flow.py --pushed-ref "${PUSHED_REF}"
+      - name: Apply deterministic kanban status
+        if: github.event_name != 'workflow_dispatch' || inputs.apply
+        env:
+          GH_TOKEN: ${{ secrets.GANDIWA_PROJECT_TOKEN }}
+          PUSHED_REF: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+        run: python3 scripts/kanban_flow.py --apply --pushed-ref "${PUSHED_REF}"

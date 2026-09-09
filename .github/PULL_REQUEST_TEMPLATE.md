@@ -2,7 +2,9 @@
 
 ## Linked issue
 
-Closes #
+Fixes #
+
+Branch contract: use `<type>/issue-<number>-<slug>` and one matching closing reference, for example `feat/issue-8-expand-ci` with `Fixes #8`.
 
 ## Verification
 
