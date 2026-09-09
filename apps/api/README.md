@@ -1,6 +1,6 @@
 # Processing API and Worker
 
-Python 3.12 FastAPI package foundation. The process probes from Issue #3 and the SQLite/Alembic foundation from Issue #4 are implemented; the separate worker command remains absent until Issue #5 is implemented with tests.
+Python 3.12 FastAPI package foundation. The process probes from Issue #3, the SQLite/Alembic foundation from Issue #4, and the worker process from Issue #5 are implemented.
 
 ## Implemented Process Probes
 
@@ -9,33 +9,24 @@ Python 3.12 FastAPI package foundation. The process probes from Issue #3 and the
 - The database write probe is rolled back and leaves no table or row behind. On a WAL database, SQLite may still create or maintain normal `-wal`/`-shm` sidecar files.
 - Unavailable responses expose boolean check names only—never paths, database URLs, secrets, or raw exceptions.
 
-Issue #4 owns the actual SQLAlchemy models, Alembic migration, and SQLite runtime configuration; Issue #3 only verifies their expected operational contract.
-
 ## SQLite and Alembic Foundation
 
 - SQLAlchemy 2 typed declarative models with `DeclarativeBase`.
 - `GenerationJob` durable queue model matching the ADR-0001 contract.
-- Alembic migration `0001` creates the queue schema with claim index.
+- `WorkerState` singleton table tracking worker process heartbeat.
+- Alembic migration `0001` creates the queue and worker state schema.
 - SQLite runtime: `foreign_keys=ON`, WAL, configurable busy timeout.
 - Migration is an explicit command (`corepack pnpm migrate`), never automatic on startup.
 - `alembic check` confirms model-migration synchronization.
 - Settings reject non-SQLite URLs and invalid busy timeout values.
 
+## Worker Process
+
+- Separate background thread, independent from FastAPI.
+- Single concurrency (fixed to 1).
+- Writes heartbeat and status to `worker_state` table in SQLite.
+- Graceful shutdown via `stop_event` and thread join.
+- No public port — pure poller, not a server.
+- Actual job dispatch belongs to a later issue.
+
 ## API Responsibilities
-
-- secure single-user session and CSRF posture;
-- provider/capability configuration from backend secret file/environment only;
-- immutable ruleset snapshots;
-- enqueue and return `job_id` without blocking on provider work;
-- status, cancellation request, preflight, artifact, and export-validation endpoints;
-- redacted structured logs.
-
-## Worker Responsibilities
-
-- one active job using SQLite priority+FIFO queue;
-- lease, heartbeat, recovery, `needs_review` for unknown dispatch, and cooperative cancellation;
-- exact user-selected 9Router/fal.ai calls;
-- safe/idempotent retry only;
-- sanitization, audit, conversion, and temporary artifact staging.
-
-The backend never writes directly to a browser-owned project folder. Production API/worker run as separate Docker Compose services on bejo2-vnic and are exposed only through host Nginx.

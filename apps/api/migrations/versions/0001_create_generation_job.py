@@ -1,4 +1,4 @@
-"""Create the durable generation job foundation.
+"""Create the durable generation job and worker state foundation.
 
 Revision ID: 0001
 Revises: None
@@ -50,7 +50,17 @@ def upgrade() -> None:
         ["status", "priority", "created_at"],
     )
 
+    op.create_table(
+        "worker_state",
+        sa.Column("id", sa.Integer(), primary_key=True),
+        sa.Column("status", sa.String(length=32), nullable=False, server_default="idle"),
+        sa.Column("heartbeat_at", sa.DateTime(timezone=True)),
+        sa.Column("started_at", sa.DateTime(timezone=True)),
+    )
+    op.execute("INSERT INTO worker_state (id, status) VALUES (1, 'idle')")
+
 
 def downgrade() -> None:
+    op.drop_table("worker_state")
     op.drop_index("ix_generation_job_claim", table_name="generation_job")
     op.drop_table("generation_job")
