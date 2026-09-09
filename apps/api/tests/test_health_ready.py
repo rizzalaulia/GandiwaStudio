@@ -227,7 +227,10 @@ async def test_ready_rejects_partial_database_corruption(
     }
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses file permission bits")
+@pytest.mark.skipif(
+    getattr(os, "geteuid", lambda: -1)() == 0,
+    reason="root bypasses file permission bits",
+)
 async def test_ready_rejects_a_read_only_database(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -300,7 +303,10 @@ async def test_ready_rejects_a_missing_artifact_directory(
     assert response.json()["checks"]["artifacts_dir"] is False
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses directory permission bits")
+@pytest.mark.skipif(
+    os.name == "nt" or getattr(os, "geteuid", lambda: -1)() == 0,
+    reason="Windows or root bypasses directory permission bits",
+)
 async def test_ready_rejects_an_unwritable_artifact_directory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
