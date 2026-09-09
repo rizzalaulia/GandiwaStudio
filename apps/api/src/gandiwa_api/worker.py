@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 from datetime import UTC, datetime
 from typing import Literal
@@ -10,6 +11,8 @@ from sqlalchemy import text
 
 from gandiwa_api.config import Settings
 from gandiwa_api.database import create_sqlite_engine
+
+logger = logging.getLogger(__name__)
 
 WorkerStatus = Literal["idle", "running", "stopped"]
 
@@ -71,7 +74,7 @@ class Worker:
 
     def _update_heartbeat(self, status: str) -> None:
         """Write current status and timestamp to the worker_state table."""
-        now = datetime.now(UTC)
+        now = datetime.now(UTC).isoformat()
         engine = create_sqlite_engine(self._settings)
         try:
             with engine.begin() as connection:
@@ -91,7 +94,7 @@ class Worker:
                         {"started": now},
                     )
         except Exception:
-            # Heartbeat failure must not crash the worker
-            pass
+            # Heartbeat failure must not crash the worker, but must remain observable.
+            logger.exception("Unable to update worker heartbeat")
         finally:
             engine.dispose()

@@ -8,10 +8,20 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import FastAPI, status
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
 
 from gandiwa_api.config import Settings
+from gandiwa_api.security.artifacts import build_artifact_download_response
+from gandiwa_api.security.csrf import (
+    SESSION_COOKIE_NAME,
+    CSRFProtectionMiddleware,
+    generate_csrf_token,
+    set_csrf_cookie,
+    verify_session_token,
+)
+from gandiwa_api.security.providers import ProviderInfo, get_configured_providers
 
 try:
     APP_VERSION = version("gandiwa-api")
@@ -24,6 +34,24 @@ EXPECTED_SCHEMA_REVISION = "0001"
 SQLITE_URL_PREFIX = "sqlite:///"
 
 app = FastAPI(title="Gandiwa Studio API", version=APP_VERSION)
+
+# Explicit origins only: credentials/cookies are never paired with a wildcard origin.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=Settings().ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "X-CSRF-Token"],
+)
+app.add_middleware(
+    CSRFProtectionMiddleware,
+    exempt_paths={
+        "/api/v1/health",
+        "/api/v1/ready",
+        "/api/v1/auth/csrf",
+        "/api/v1/providers",
+    },
+)
 
 
 def _sqlite_path(database_url: str) -> Path | None:
@@ -60,18 +88,14 @@ def _check_database(
 
             try:
                 connection.execute("BEGIN IMMEDIATE")
-                connection.execute(
-                    'CREATE TABLE "__gandiwa_readiness_probe" (id INTEGER)'
-                )
+                connection.execute('CREATE TABLE "__gandiwa_readiness_probe" (id INTEGER)')
             except sqlite3.Error:
                 connection.rollback()
                 return False, False, False
 
             database_ok = True
             try:
-                revisions = connection.execute(
-                    "SELECT version_num FROM alembic_version"
-                ).fetchall()
+                revisions = connection.execute("SELECT version_num FROM alembic_version").fetchall()
                 migration_ok = revisions == [(expected_revision,)]
             except sqlite3.Error:
                 migration_ok = False
@@ -136,3 +160,38 @@ def get_ready() -> JSONResponse:
             "checks": checks,
         },
     )
+
+
+@app.get("/api/v1/auth/csrf")
+def get_csrf_token() -> JSONResponse:
+    """Provide a signed CSRF token and set the matching client cookie."""
+    current_settings = Settings()
+    token = generate_csrf_token(current_settings.SESSION_SECRET)
+    response = JSONResponse(content={"csrf_token": token})
+    set_csrf_cookie(response, token, secure=current_settings.SECURE_COOKIES)
+    return response
+
+
+@app.get("/api/v1/providers")
+def list_providers() -> list[ProviderInfo]:
+    """List available AI connectors configured on backend without exposing secrets."""
+    current_settings = Settings()
+    return get_configured_providers(current_settings)
+
+
+@app.get("/api/v1/artifacts/{filename}/download")
+def download_artifact(filename: str, request: Request) -> FileResponse:
+    """Download an artifact only for an authenticated session, always as an attachment.
+
+    Identity/session issuance is deliberately outside Issue #7. Until that MVP decision is
+    implemented, requests without a server-signed HttpOnly session fail closed with 401.
+    """
+    current_settings = Settings()
+    if not verify_session_token(
+        request.cookies.get(SESSION_COOKIE_NAME), current_settings.SESSION_SECRET
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+        )
+    return build_artifact_download_response(filename, current_settings.ARTIFACT_DIR)
