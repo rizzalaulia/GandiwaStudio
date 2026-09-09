@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "project_id": "c1eea34e-3bc4-4f3a-a379-9bde06e8e1d9",
+  "project_name": "Pohon Garis",
+  "assets": [
+    {
+      "asset_id": "e0d955ce-5a92-4d81-847e-a53707ee4ca2",
+      "content_type": "vector",
+      "creation_method": "manual_digital",
+      "revisions": [
+        {
+          "revision": 1,
+          "generation_format": "svg",
+          "working_format": "svg",
+          "master_format": "svg",
+          "submission_format": "svg",
+          "relative_path": "revisions/e0d955ce-5a92-4d81-847e-a53707ee4ca2/0001/master.svg"
+        }
+      ]
+    }
+  ]
+}

@@ -55,6 +55,7 @@ class CiWorkflowContractTests(unittest.TestCase):
                 "corepack pnpm --filter @gandiwa/web typecheck",
                 "corepack pnpm --filter @gandiwa/web test",
                 "corepack pnpm --filter @gandiwa/web build",
+                "corepack pnpm --filter @gandiwa/contracts test",
             }.issubset(job_runs(self.jobs["frontend-quality"]))
         )
 

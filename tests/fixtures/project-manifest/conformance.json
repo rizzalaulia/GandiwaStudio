@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "cases": [
+    { "fixture": "valid-minimal.json", "valid": true },
+    { "fixture": "valid-vector.json", "valid": true },
+    { "fixture": "invalid-revision-outside-revisions.json", "valid": false },
+    { "fixture": "invalid-secret-field.json", "valid": false },
+    { "fixture": "invalid-schema-boolean.json", "valid": false },
+    { "fixture": "invalid-durable-queue-state.json", "valid": false },
+    { "fixture": "invalid-creation-method.json", "valid": false },
+    { "fixture": "invalid-absolute-path.json", "valid": false },
+    { "fixture": "invalid-windows-drive-path.json", "valid": false },
+    { "fixture": "invalid-unc-path.json", "valid": false },
+    { "fixture": "invalid-backslash-path.json", "valid": false },
+    { "fixture": "invalid-path-traversal.json", "valid": false },
+    { "fixture": "invalid-duplicate-asset-id.json", "valid": false },
+    { "fixture": "invalid-duplicate-relative-path.json", "valid": false },
+    { "fixture": "invalid-durable-events-state.json", "valid": false },
+    { "fixture": "invalid-durable-artifacts-state.json", "valid": false }
+  ]
+}

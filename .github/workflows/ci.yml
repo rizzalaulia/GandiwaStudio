@@ -37,6 +37,8 @@ jobs:
         run: corepack pnpm --filter @gandiwa/web test
       - name: Build frontend production bundle
         run: corepack pnpm --filter @gandiwa/web build
+      - name: Verify cross-language project manifest fixtures
+        run: corepack pnpm --filter @gandiwa/contracts test
 
   backend-quality:
     name: Backend quality
