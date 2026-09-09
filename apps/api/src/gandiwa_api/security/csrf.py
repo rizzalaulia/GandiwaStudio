@@ -62,17 +62,37 @@ def set_csrf_cookie(
     )
 
 
+def sign_session_id(session_id: str, secret: str) -> str:
+    """Return an opaque signed session value suitable for an HttpOnly cookie."""
+    signature = hmac.new(
+        secret.encode("utf-8"), session_id.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    return f"{session_id}.{signature}"
+
+
+def verify_session_token(token: str | None, secret: str) -> bool:
+    """Verify an opaque session cookie; session issuance belongs to a future identity flow."""
+    if not token or "." not in token:
+        return False
+    session_id, signature = token.rsplit(".", 1)
+    if not session_id or not signature:
+        return False
+    expected = sign_session_id(session_id, secret).rsplit(".", 1)[1]
+    return hmac.compare_digest(signature, expected)
+
+
 def set_session_cookie(
     response: Response,
     session_id: str,
     *,
+    secret: str,
     secure: bool = False,
 ) -> None:
-    """Set the HttpOnly session cookie inaccessible to client scripts."""
+    """Set the HttpOnly, signed session cookie inaccessible to client scripts."""
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
-        value=session_id,
-        httponly=True,  # Inaccessible to JS
+        value=sign_session_id(session_id, secret),
+        httponly=True,
         samesite="lax",
         secure=secure,
         path="/",
@@ -114,9 +134,7 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
         if not hmac.compare_digest(csrf_header, csrf_cookie):
             return JSONResponse(
                 status_code=status.HTTP_403_FORBIDDEN,
-                content={
-                    "detail": "CSRF validation failed: header and cookie tokens do not match"
-                },
+                content={"detail": "CSRF validation failed: header and cookie tokens do not match"},
             )
 
         if not verify_csrf_token(csrf_header, self.settings.SESSION_SECRET):

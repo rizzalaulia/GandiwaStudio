@@ -8,8 +8,18 @@ Mengimplementasikan fondasi keamanan (security baseline) untuk Gandiwa Studio AP
 > Pekerjaan dilakukan pada branch lokal `feat/issue-7-security-boundaries`. Setiap commit dan push dijalankan hanya atas perintah eksplisit pemegang keputusan.
 
 > [!NOTE]
-> **Pengecualian SSRF untuk 9Router Tailscale:**
-> Tailscale menggunakan rentang CGNAT `100.64.0.0/10` (dari `100.64.0.0` sampai `100.127.255.255`). Pengecualian SSRF hanya akan mengizinkan request ke host/IP yang **secara eksplisit dikonfigurasi oleh backend operator** (melalui `NINEROUTER_BASE_URL`) dan berada dalam rentang IP yang sah. Semua IP privat lainnya (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), loopback (`127.0.0.0/8`), link-local (`169.254.0.0/16`), dan metadata cloud akan ditolak secara ketat.
+> **Pengecualian sempit 9Router Tailscale:** Tailscale memakai CGNAT
+> `100.64.0.0/10`. Hanya base URL backend `NINEROUTER_BASE_URL` yang memakai
+> HTTP, tepat pada path `/v1`, dan seluruh resolusi DNS-nya berada pada rentang
+> itu yang dapat dianggap valid. Tidak ada target lokal/private yang diberi
+> pengecualian. Semua `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`,
+> loopback, link-local, dan metadata cloud ditolak.
+
+> [!NOTE]
+> Issue ini belum memiliki provider dispatch/outbound request. Karena itu
+> validasi di sini adalah fondasi konfigurasi connector, bukan klaim bahwa
+> request provider sudah berjalan. Issue yang menambahkan dispatch wajib
+> menggunakan validator connector ini sebelum membuka koneksi.
 
 ---
 
@@ -18,7 +28,7 @@ Mengimplementasikan fondasi keamanan (security baseline) untuk Gandiwa Studio AP
 ### Backend Security Foundation (`apps/api/src/gandiwa_api/security/`)
 
 #### [NEW] ssrf.py
-- **URL & Scheme Validation**: Hanya menerima scheme `http` (hanya untuk host Tailscale/lokal yang diizinkan) atau `https`. Menolak `file://`, `gopher://`, `ftp://`, dsb.
+- **URL & Scheme Validation**: hanya `https` untuk fal; `http` hanya untuk 9Router Tailscale yang tepat pada base path `/v1`. Tidak ada pengecualian host lokal/private. Menolak `file://`, `gopher://`, `ftp://`, dsb.
 - **Userinfo Rejection**: Menolak URL yang mengandung kredensial (`http://user:pass@host`).
 - **IP & DNS Resolution Guard**:
   - Resolve domain ke daftar IP via DNS.
@@ -27,8 +37,7 @@ Mengimplementasikan fondasi keamanan (security baseline) untuk Gandiwa Studio AP
   - Memblokir cloud metadata service (`169.254.169.254`, `metadata.google.internal`).
   - Memblokir private CIDR (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`).
   - Pengecualian sempit (Narrow Tailscale Exception): Hanya mengizinkan alamat IP Tailscale (`100.64.0.0/10`) jika dan hanya jika host/IP tersebut cocok dengan backend-configured `NINEROUTER_BASE_URL`.
-- **Safe HTTP Client / Redirect Boundary**:
-  - Transport HTTP client yang menonaktifkan cross-origin redirect otomatis dan memastikan kredensial/header authorization tidak bocor ke origin lain.
+- **Redirect Boundary**: Redirect lintas-origin ditolak pada helper validasi. Tidak ada HTTP client atau provider dispatch pada Issue ini; saat dispatch ditambahkan, ia wajib menonaktifkan redirect otomatis serta memvalidasi target sebelum koneksi.
 
 #### [NEW] csrf.py
 - **CSRF Protection & Token Contract**:
@@ -67,7 +76,8 @@ Mengimplementasikan fondasi keamanan (security baseline) untuk Gandiwa Studio AP
   - Tidak mengekspos API key / secrets ke browser.
   - Browser tidak dapat mengirim arbitrary target URL (hanya memilih provider yang ada di backend).
 - Menambahkan route `/api/v1/artifacts/{filename}/download`:
-  - Mengunduh artifact dengan proteksi traversal, header `attachment`, dan `nosniff`.
+  - Menolak anonymous request (`401`) sampai bootstrap identity/session resmi tersedia.
+  - Untuk sesi yang valid, mengunduh artifact dengan proteksi traversal, header `attachment`, dan `nosniff`.
 
 ---
 

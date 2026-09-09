@@ -162,7 +162,7 @@ async def test_mutating_method_succeeds_with_valid_csrf() -> None:
 
 def test_session_and_csrf_cookie_attributes() -> None:
     response = JSONResponse(content={"status": "ok"})
-    set_session_cookie(response, "sess-12345", secure=True)
+    set_session_cookie(response, "sess-12345", secret="test-session-secret", secure=True)
     set_csrf_cookie(response, "csrf-abcde", secure=True)
 
     session_cookie_header = next(

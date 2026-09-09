@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from gandiwa_api.main import app
+from gandiwa_api.security.csrf import SESSION_COOKIE_NAME, sign_session_id
 
 pytestmark = pytest.mark.anyio
 
@@ -81,8 +82,16 @@ async def test_main_app_artifact_download(
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        anonymous_response = await client.get("/api/v1/artifacts/render.svg/download")
+        assert anonymous_response.status_code == 401
+
+        client.cookies.set(
+            SESSION_COOKIE_NAME,
+            sign_session_id("test-session", "change-me-for-local-development"),
+        )
         response = await client.get("/api/v1/artifacts/render.svg/download")
-        assert response.status_code == 200
-        assert response.text == "<svg></svg>"
-        assert response.headers.get("content-disposition", "").startswith("attachment;")
-        assert response.headers.get("x-content-type-options") == "nosniff"
+
+    assert response.status_code == 200
+    assert response.text == "<svg></svg>"
+    assert response.headers.get("content-disposition", "").startswith("attachment;")
+    assert response.headers.get("x-content-type-options") == "nosniff"

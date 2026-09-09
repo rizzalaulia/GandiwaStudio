@@ -124,9 +124,7 @@ def test_worker_writes_heartbeat_to_database(settings: Settings) -> None:
         try:
             with engine.connect() as connection:
                 row = connection.execute(
-                    text(
-                        "SELECT status, heartbeat_at FROM worker_state WHERE id = 1"
-                    )
+                    text("SELECT status, heartbeat_at FROM worker_state WHERE id = 1")
                 ).fetchone()
         finally:
             engine.dispose()

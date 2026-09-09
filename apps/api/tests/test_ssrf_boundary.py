@@ -166,3 +166,29 @@ async def test_redirect_handler_blocks_redirect_to_loopback() -> None:
     )
     with pytest.raises(SSRFValidationError):
         await handle_safe_redirect(response)
+
+
+async def test_redirect_handler_allows_only_the_exact_approved_9router_base() -> None:
+    approved = "http://100.98.114.115:20128/v1"
+    request = httpx.Request("POST", "https://queue.fal.run/api")
+    response = httpx.Response(302, headers={"location": approved}, request=request)
+
+    await handle_safe_redirect(response, approved_9router_target=approved)
+
+
+@pytest.mark.parametrize(
+    ("location", "approved"),
+    [
+        ("http://100.98.114.115:20128/admin", "http://100.98.114.115:20128/v1"),
+        ("http://192.0.0.1:20128/v1", "http://192.0.0.1:20128/v1"),
+    ],
+)
+async def test_redirect_handler_rejects_non_exact_or_non_tailscale_9router_target(
+    location: str,
+    approved: str,
+) -> None:
+    request = httpx.Request("POST", "https://queue.fal.run/api")
+    response = httpx.Response(302, headers={"location": location}, request=request)
+
+    with pytest.raises(SSRFValidationError):
+        await handle_safe_redirect(response, approved_9router_target=approved)
