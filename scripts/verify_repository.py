@@ -16,7 +16,22 @@ REQUIRED = [
     "docs/adr/0002-local-first-browser-filesystem.md",
     "docs/adr/0003-bejo2-production-topology.md",
     ".env.example", ".env.production.example",
+    ".node-version", ".python-version", "package.json", "pnpm-lock.yaml",
+    "pnpm-workspace.yaml", "tsconfig.base.json",
+    "apps/web/package.json", "apps/web/tsconfig.app.json", "apps/web/src/main.tsx",
+    "apps/api/pyproject.toml", "apps/api/uv.lock",
+    "apps/api/src/gandiwa_api/__init__.py",
+    "packages/adobe-rules/package.json", "packages/contracts/package.json",
+    "packages/provider-sdk/package.json", "packages/ui/package.json",
 ]
+IGNORED_DIRS = {
+    ".git", "node_modules", ".venv", "venv", "dist", "build", ".vite",
+    "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+}
+
+def should_skip(path: Path) -> bool:
+    return any(part in IGNORED_DIRS for part in path.parts)
+
 errors = []
 for item in REQUIRED:
     if not (ROOT / item).is_file():
@@ -24,6 +39,8 @@ for item in REQUIRED:
 
 link_re = re.compile(r"(?<!!)\[[^]]*\]\(([^)]+)\)")
 for md in ROOT.rglob("*.md"):
+    if should_skip(md):
+        continue
     text = md.read_text(encoding="utf-8")
     for target in link_re.findall(text):
         target = target.split("#", 1)[0]
@@ -33,7 +50,9 @@ for md in ROOT.rglob("*.md"):
             errors.append(f"broken local link: {md.relative_to(ROOT)} -> {target}")
 
 for path in ROOT.rglob("*"):
-    if path.is_file() and path.name not in {"verify_repository.py"}:
+    if should_skip(path) or path.name in {"verify_repository.py", "test_scaffold_contract.py"}:
+        continue
+    if path.is_file():
         try:
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:

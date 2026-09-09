@@ -1,6 +1,6 @@
 # Web Application
 
-Planned React + TypeScript strict + Vite browser workspace.
+React + TypeScript strict + Vite browser workspace foundation. The current shell intentionally exposes no product workflow until its dedicated issues are implemented.
 
 ## Responsibilities
 
