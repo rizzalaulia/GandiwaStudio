@@ -1,4 +1,4 @@
-"""Configuration settings for Gandiwa API."""
+"""Configuration settings for the Gandiwa API probes."""
 
 from pathlib import Path
 
@@ -6,12 +6,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    """Runtime paths and schema expectations used by readiness checks."""
+
     model_config = SettingsConfigDict(env_prefix="GANDIWA_", extra="ignore")
 
-    ENV: str = "development"
-    VERSION: str = "0.1.0"
-    DATABASE_PATH: Path = Path("/tmp/gandiwa.sqlite3")
-    ARTIFACT_DIR: Path = Path("/tmp/gandiwa_artifacts")
-
-
-settings = Settings()
+    DATABASE_URL: str = "sqlite:///./var/gandiwa.sqlite3"
+    ARTIFACT_DIR: Path = Path("./var/artifacts")
