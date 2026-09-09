@@ -93,7 +93,12 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
         self.exempt_paths = exempt_paths or set()
 
     async def dispatch(self, request: Request, call_next: Callable[..., Any]) -> Response:
-        if request.method in SAFE_METHODS or request.url.path in self.exempt_paths:
+        normalized_path = request.url.path.rstrip("/") or "/"
+        if (
+            request.method in SAFE_METHODS
+            or request.url.path in self.exempt_paths
+            or normalized_path in self.exempt_paths
+        ):
             return await call_next(request)  # type: ignore[no-any-return]
 
         # Check for CSRF header and cookie on state-changing methods

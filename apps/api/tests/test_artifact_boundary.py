@@ -65,7 +65,7 @@ async def test_download_png_uses_attachment_and_nosniff(tmp_path: Path) -> None:
         assert "image/png" in response.headers.get("content-type", "")
 
 
-def test_path_traversal_is_blocked(tmp_path: Path) -> None:
+def test_path_traversal_and_dotfiles_are_blocked(tmp_path: Path) -> None:
     for malicious_name in (
         "../secret.txt",
         "..\\secret.txt",
@@ -73,11 +73,16 @@ def test_path_traversal_is_blocked(tmp_path: Path) -> None:
         "sub/file.svg",
         "nested/../test.svg",
         "evil/payload.svg",
+        ".env",
+        ".secret",
+        "..",
+        ".gandiwa-readiness-probe",
     ):
         with pytest.raises(HTTPException) as exc_info:
             validate_artifact_path(malicious_name, tmp_path)
         assert exc_info.value.status_code == 400
-        assert "illegal characters" in exc_info.value.detail or "traversal" in exc_info.value.detail
+        detail = exc_info.value.detail.lower()
+        assert "illegal characters" in detail or "traversal" in detail or "dotfiles" in detail
 
 
 async def test_non_existent_artifact_returns_404(tmp_path: Path) -> None:

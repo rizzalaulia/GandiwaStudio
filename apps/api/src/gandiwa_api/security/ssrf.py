@@ -133,6 +133,7 @@ def validate_connector_url(
         approved_port = approved_split.port or (80 if approved_split.scheme == "http" else 443)
         if (
             approved_host
+            and parsed.scheme == approved_split.scheme
             and hostname.lower() == approved_host.lower()
             and port == approved_port
         ):
@@ -195,7 +196,11 @@ def validate_connector_url(
     return hostname, port, resolved_ips
 
 
-async def handle_safe_redirect(response: httpx.Response) -> None:
+async def handle_safe_redirect(
+    response: httpx.Response,
+    *,
+    approved_9router_target: str | None = None,
+) -> None:
     """Validate HTTP redirect targets against cross-origin and SSRF rules."""
     if response.is_redirect and "location" in response.headers:
         redirect_target = response.headers["location"]
@@ -212,7 +217,10 @@ async def handle_safe_redirect(response: httpx.Response) -> None:
                 f"Cross-origin redirect from '{response.url}' to '{full_target_url}' is blocked"
             )
 
-        validate_connector_url(full_target_url)
+        validate_connector_url(
+            full_target_url,
+            approved_9router_target=approved_9router_target,
+        )
 
 
 def build_safe_http_client(
@@ -222,7 +230,10 @@ def build_safe_http_client(
 ) -> httpx.AsyncClient:
     """Build an httpx AsyncClient configured with safe redirect enforcement."""
     async def _on_response(response: httpx.Response) -> None:
-        await handle_safe_redirect(response)
+        await handle_safe_redirect(
+            response,
+            approved_9router_target=approved_9router_target,
+        )
 
     return httpx.AsyncClient(
         timeout=timeout,

@@ -56,6 +56,10 @@ async def test_safe_get_method_succeeds_without_csrf() -> None:
         assert res.status_code == 200
         assert res.json() == {"status": "read"}
 
+        # Trailing slash test on exempt path: passes CSRF middleware without 403
+        res_slash = await client.get("/api/v1/auth/csrf/")
+        assert res_slash.status_code in (200, 307)
+
 
 async def test_mutating_method_rejected_when_csrf_missing() -> None:
     settings = Settings(SESSION_SECRET="test-secret")

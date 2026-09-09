@@ -118,6 +118,9 @@ def test_rejects_tailscale_target_mismatched_port_or_host() -> None:
     # Wrong IP
     with pytest.raises(SSRFValidationError):
         validate_connector_url("http://100.98.114.116:20128/v1", approved_9router_target=approved)
+    # Wrong Scheme (https vs http)
+    with pytest.raises(SSRFValidationError):
+        validate_connector_url("https://100.98.114.115:20128/v1", approved_9router_target=approved)
 
 
 def test_allows_approved_9router_tailscale_target() -> None:

@@ -9,8 +9,8 @@ from pathlib import Path
 from fastapi import HTTPException, status
 from fastapi.responses import FileResponse
 
-# Pattern for safe artifact file names (alphanumeric, dash, underscore, dot)
-SAFE_FILENAME_PATTERN = re.compile(r"^[A-Za-z0-9_\-\.]+$")
+# Pattern for safe artifact file names (must start with alphanumeric, underscore, or dash)
+SAFE_FILENAME_PATTERN = re.compile(r"^[A-Za-z0-9_\-][A-Za-z0-9_\-\.]*$")
 
 
 def validate_artifact_path(filename: str, artifact_dir: Path) -> Path:
@@ -21,10 +21,18 @@ def validate_artifact_path(filename: str, artifact_dir: Path) -> Path:
             detail="Filename must be a non-empty string",
         )
 
-    if "/" in filename or "\\" in filename or not SAFE_FILENAME_PATTERN.match(filename):
+    if (
+        "/" in filename
+        or "\\" in filename
+        or filename.startswith(".")
+        or not SAFE_FILENAME_PATTERN.match(filename)
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid artifact filename: illegal characters or path traversal attempted",
+            detail=(
+                "Invalid artifact filename: illegal characters, "
+                "dotfiles, or path traversal attempted"
+            ),
         )
 
     resolved_dir = artifact_dir.resolve()
