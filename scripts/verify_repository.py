@@ -9,7 +9,7 @@ REQUIRED = [
     "README.md", "LICENSE", "CONTRIBUTING.md", "CODE_OF_CONDUCT.md",
     "SECURITY.md", "SUPPORT.md", "GOVERNANCE.md", "CHANGELOG.md",
     "docs/BRD.md", "docs/PRD.md", "docs/ERD.md", "docs/DESIGN.md",
-    "docs/ADOBE-RULESET.md", "docs/ARCHITECTURE.md",
+    "docs/ADOBE-RULESET.md", "docs/ARCHITECTURE.md", "docs/STATUS-CONTRACT.md",
     "docs/DEVELOPMENT-SEQUENCE.md", "docs/TECHNOLOGY.md",
     "docs/DEPLOYMENT-BEJO2.md", "docs/OPERATIONS.md",
     "docs/adr/0001-sqlite-durable-job-queue.md",

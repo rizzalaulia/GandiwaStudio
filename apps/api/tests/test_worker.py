@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import signal
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -107,6 +110,16 @@ def test_worker_does_not_bind_to_any_port(settings: Settings) -> None:
     )
 
 
+def test_worker_logs_a_heartbeat_database_failure(settings: Settings) -> None:
+    """A failed heartbeat remains observable instead of being silently swallowed."""
+    worker = Worker(settings)
+
+    with patch("gandiwa_api.worker.logger.exception") as log_exception:
+        worker._update_heartbeat("running")
+
+    log_exception.assert_called_once_with("Unable to update worker heartbeat")
+
+
 def test_worker_writes_heartbeat_to_database(settings: Settings) -> None:
     """Worker heartbeat/status is observable through backend state."""
     from alembic import command as alembic_command
@@ -152,3 +165,46 @@ def test_worker_stops_on_signal(settings: Settings) -> None:
 
     assert worker.is_running is False
     assert worker.status == "stopped"
+
+
+def test_worker_cli_starts_independently_and_handles_sigterm(settings: Settings) -> None:
+    """The packaged worker command runs separately from FastAPI and exits cleanly."""
+    from alembic import command as alembic_command
+    from sqlalchemy import text
+
+    alembic_command.upgrade(_alembic_config(settings.DATABASE_URL), "head")
+    environment = os.environ.copy()
+    environment["GANDIWA_DATABASE_URL"] = settings.DATABASE_URL
+    environment["GANDIWA_ARTIFACT_DIR"] = str(settings.ARTIFACT_DIR)
+    process = subprocess.Popen(
+        [str(Path(__file__).parents[1] / ".venv/bin/gandiwa-worker")],
+        env=environment,
+    )
+
+    engine = create_sqlite_engine(settings)
+    try:
+        deadline = time.monotonic() + 5
+        observed_status = None
+        while time.monotonic() < deadline:
+            with engine.connect() as connection:
+                observed_status = connection.execute(
+                    text("SELECT status FROM worker_state WHERE id = 1")
+                ).scalar_one()
+            if observed_status == "running":
+                break
+            time.sleep(0.05)
+        assert observed_status == "running"
+
+        process.send_signal(signal.SIGTERM)
+        assert process.wait(timeout=5) == 0
+
+        with engine.connect() as connection:
+            stopped_status = connection.execute(
+                text("SELECT status FROM worker_state WHERE id = 1")
+            ).scalar_one()
+        assert stopped_status == "stopped"
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+        engine.dispose()

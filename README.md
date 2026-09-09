@@ -25,7 +25,7 @@ Gandiwa Studio helps a contributor move from brief to an audited export package.
 - Development on `bejo1-oracle`; production on ARM64 `bejo2-vnic` using host Nginx + Docker Compose.
 - Manual Adobe Stock upload.
 
-Core contracts: [development sequence](docs/DEVELOPMENT-SEQUENCE.md), [technology](docs/TECHNOLOGY.md), [architecture](docs/ARCHITECTURE.md), [bejo2 deployment](docs/DEPLOYMENT-BEJO2.md), [operations](docs/OPERATIONS.md), [PRD](docs/PRD.md), [BRD](docs/BRD.md), [ERD](docs/ERD.md), [design system](docs/DESIGN.md), and [Adobe ruleset](docs/ADOBE-RULESET.md).
+Core contracts: [development sequence](docs/DEVELOPMENT-SEQUENCE.md), [technology](docs/TECHNOLOGY.md), [architecture](docs/ARCHITECTURE.md), [runtime status](docs/STATUS-CONTRACT.md), [bejo2 deployment](docs/DEPLOYMENT-BEJO2.md), [operations](docs/OPERATIONS.md), [PRD](docs/PRD.md), [BRD](docs/BRD.md), [ERD](docs/ERD.md), [design system](docs/DESIGN.md), and [Adobe ruleset](docs/ADOBE-RULESET.md).
 
 ## Planned Architecture
 
@@ -88,7 +88,7 @@ pnpm build
 pnpm check
 ```
 
-`pnpm check` runs lint, strict type checks, tests, production builds, and repository verification. The web scaffold has no product actions, and the Python package intentionally exposes no API route until the health/readiness issue is implemented.
+`pnpm check` runs lint, strict type checks, tests, production builds, and repository verification. Stage 1 exposes `/api/v1/health`, `/api/v1/ready`, and `/api/v1/status`, plus the separate `corepack pnpm worker` command. The web shell deliberately has no project-management or generation behavior until its corresponding stage is implemented.
 
 ## Security
 

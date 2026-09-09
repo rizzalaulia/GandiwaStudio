@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     ENV: str = Field(default="development", validation_alias=AliasChoices("GANDIWA_ENV", "ENV"))
     DATABASE_URL: str = "sqlite:///./var/gandiwa.sqlite3"
     DATABASE_BUSY_TIMEOUT_MS: int = 5_000
+    WORKER_HEARTBEAT_STALE_SECONDS: int = 5
     ARTIFACT_DIR: Path = Path("./var/artifacts")
     SESSION_SECRET: str = Field(
         default=DEVELOPMENT_SESSION_SECRET,
@@ -77,6 +78,8 @@ class Settings(BaseSettings):
             raise ValueError("DATABASE_URL must use the SQLite scheme")
         if self.DATABASE_BUSY_TIMEOUT_MS < 1:
             raise ValueError("DATABASE_BUSY_TIMEOUT_MS must be greater than or equal to 1")
+        if self.WORKER_HEARTBEAT_STALE_SECONDS < 1:
+            raise ValueError("WORKER_HEARTBEAT_STALE_SECONDS must be greater than or equal to 1")
 
         is_production = self.ENV.strip().lower() == "production"
         if is_production:

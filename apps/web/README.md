@@ -1,6 +1,6 @@
 # Web Application
 
-React + TypeScript strict + Vite browser workspace foundation. The current shell intentionally exposes no product workflow until its dedicated issues are implemented.
+React + TypeScript strict + Vite browser workspace. Stage 1 renders real backend and worker status from the same-origin API; project workflows remain intentionally absent until Stage 2.
 
 ## Responsibilities
 
