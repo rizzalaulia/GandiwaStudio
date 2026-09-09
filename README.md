@@ -25,7 +25,7 @@ Gandiwa Studio helps a contributor move from brief to an audited export package.
 - Development on `bejo1-oracle`; production on ARM64 `bejo2-vnic` using host Nginx + Docker Compose.
 - Manual Adobe Stock upload.
 
-Core contracts: [development sequence](docs/DEVELOPMENT-SEQUENCE.md), [technology](docs/TECHNOLOGY.md), [architecture](docs/ARCHITECTURE.md), [runtime status](docs/STATUS-CONTRACT.md), [bejo2 deployment](docs/DEPLOYMENT-BEJO2.md), [operations](docs/OPERATIONS.md), [PRD](docs/PRD.md), [BRD](docs/BRD.md), [ERD](docs/ERD.md), [design system](docs/DESIGN.md), and [Adobe ruleset](docs/ADOBE-RULESET.md).
+Core contracts: [development sequence](docs/DEVELOPMENT-SEQUENCE.md), [project manifest](docs/PROJECT-MANIFEST.md), [technology](docs/TECHNOLOGY.md), [architecture](docs/ARCHITECTURE.md), [runtime status](docs/STATUS-CONTRACT.md), [bejo2 deployment](docs/DEPLOYMENT-BEJO2.md), [operations](docs/OPERATIONS.md), [PRD](docs/PRD.md), [BRD](docs/BRD.md), [ERD](docs/ERD.md), [design system](docs/DESIGN.md), and [Adobe ruleset](docs/ADOBE-RULESET.md).
 
 ## Planned Architecture
 

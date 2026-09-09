@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "project_id": "6e9e0cd4-7b2e-46fc-84ad-5a40816bdca1",
+  "project_name": "Studio Burung Laut",
+  "assets": [
+    {
+      "asset_id": "d6293da2-343a-4e85-98f3-29e2d1a04aa7",
+      "content_type": "illustration",
+      "creation_method": "generative_ai",
+      "revisions": [
+        {
+          "revision": 1,
+          "generation_format": "png",
+          "working_format": "png",
+          "master_format": "png",
+          "submission_format": "jpeg",
+          "relative_path": "C:/Users/artist/master.png"
+        }
+      ]
+    }
+  ]
+}
