@@ -44,3 +44,14 @@ class GenerationJob(Base):
     error_code: Mapped[str | None] = mapped_column(String(64))
     redacted_error: Mapped[str | None] = mapped_column(Text)
     result_manifest: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+
+
+class WorkerState(Base):
+    """Singleton row tracking the worker process heartbeat."""
+
+    __tablename__ = "worker_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    status: Mapped[str] = mapped_column(String(32), default="idle", server_default="idle")
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
