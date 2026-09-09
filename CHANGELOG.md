@@ -9,6 +9,7 @@ All notable changes to this project will be documented here. The format follows 
 - Strict TypeScript/Vite web shell with Vitest, Testing Library, ESLint, and Tailwind.
 - Exact npm/PyPI dependency manifests plus `pnpm-lock.yaml` and `apps/api/uv.lock`.
 - Canonical root lint, typecheck, test, build, and repository verification commands.
+- FastAPI liveness and dependency-aware readiness probes with rolled-back SQLite write checks, migration/queue validation, and temporary artifact cleanup.
 
 - Documentation-first open-source repository structure.
 - Locked `mvp-1.0` product, data, design, and Adobe ruleset contracts.

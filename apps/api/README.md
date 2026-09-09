@@ -1,6 +1,15 @@
 # Processing API and Worker
 
-Python 3.12 FastAPI package foundation. API routes and the separate worker command intentionally remain absent until Issues #3 and #5 are implemented with tests.
+Python 3.12 FastAPI package foundation. The process probes from Issue #3 are implemented; the separate worker command remains absent until Issue #5 is implemented with tests.
+
+## Implemented Process Probes
+
+- `GET /api/v1/health` reports process liveness and package version without touching runtime dependencies.
+- `GET /api/v1/ready` returns `200` only when the existing SQLite database passes open/read/write checks, its Alembic revision matches the application contract, the queue table is queryable, and the artifact directory supports a temporary write and cleanup.
+- The database write probe is rolled back and leaves no table or row behind. On a WAL database, SQLite may still create or maintain normal `-wal`/`-shm` sidecar files.
+- Unavailable responses expose boolean check names only—never paths, database URLs, secrets, or raw exceptions.
+
+Issue #4 owns the actual SQLAlchemy models, Alembic migration, and SQLite runtime configuration; Issue #3 only verifies their expected operational contract.
 
 ## API Responsibilities
 
