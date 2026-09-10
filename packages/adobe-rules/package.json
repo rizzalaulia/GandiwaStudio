@@ -12,9 +12,11 @@
   "files": ["dist"],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "test": "tsc -p tsconfig.json && node --test dist/index.test.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
+    "@types/node": "26.5.0",
     "typescript": "6.0.3"
   }
 }
