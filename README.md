@@ -25,7 +25,7 @@ Gandiwa Studio helps a contributor move from brief to an audited export package.
 - Development on `bejo1-oracle`; production on ARM64 `bejo2-vnic` using host Nginx + Docker Compose.
 - Manual Adobe Stock upload.
 
-Core contracts: [development sequence](docs/DEVELOPMENT-SEQUENCE.md), [project manifest](docs/PROJECT-MANIFEST.md), [technology](docs/TECHNOLOGY.md), [architecture](docs/ARCHITECTURE.md), [runtime status](docs/STATUS-CONTRACT.md), [bejo2 deployment](docs/DEPLOYMENT-BEJO2.md), [operations](docs/OPERATIONS.md), [PRD](docs/PRD.md), [BRD](docs/BRD.md), [ERD](docs/ERD.md), [design system](docs/DESIGN.md), and [Adobe ruleset](docs/ADOBE-RULESET.md).
+Core contracts: [development sequence](docs/DEVELOPMENT-SEQUENCE.md), [project manifest](docs/PROJECT-MANIFEST.md), [raster preflight](docs/RASTER-PREFLIGHT.md), [technology](docs/TECHNOLOGY.md), [architecture](docs/ARCHITECTURE.md), [runtime status](docs/STATUS-CONTRACT.md), [bejo2 deployment](docs/DEPLOYMENT-BEJO2.md), [operations](docs/OPERATIONS.md), [PRD](docs/PRD.md), [BRD](docs/BRD.md), [ERD](docs/ERD.md), [design system](docs/DESIGN.md), and [Adobe ruleset](docs/ADOBE-RULESET.md).
 
 ## Planned Architecture
 
@@ -88,7 +88,7 @@ pnpm build
 pnpm check
 ```
 
-`pnpm check` runs lint, strict type checks, tests, production builds, and repository verification. Stage 1 exposes `/api/v1/health`, `/api/v1/ready`, and `/api/v1/status`, plus the separate `corepack pnpm worker` command. Stage 2 currently implements Create Project plus Open, close, and browser-local reopen for valid Chrome/Edge project folders. Reopen uses a browser-local IndexedDB directory handle with explicit permission recovery called directly from the Reopen action; it is not cloud sync. If handle persistence fails after a valid Open/Create, the current project remains available and the UI reports that cross-session Reopen was not saved. The app detects an externally changed manifest and requires reload, browser-download copy, or cancel instead of automatic overwrite. Import, generation, audit, and export remain unavailable until their corresponding stages are implemented.
+`pnpm check` runs lint, strict type checks, tests, production builds, and repository verification. Stage 1 exposes `/api/v1/health`, `/api/v1/ready`, and `/api/v1/status`, plus the separate `corepack pnpm worker` command. Stage 2 currently implements Create Project plus Open, close, and browser-local reopen for valid Chrome/Edge project folders. Reopen uses a browser-local IndexedDB directory handle with explicit permission recovery called directly from the Reopen action; it is not cloud sync. If handle persistence fails after a valid Open/Create, the current project remains available and the UI reports that cross-session Reopen was not saved. The app detects an externally changed manifest and requires reload, browser-download copy, or cancel instead of automatic overwrite. Stage 3 currently provides a project-scoped UI plus CSRF-protected, ephemeral PNG/JPEG technical preflight; see [raster preflight](docs/RASTER-PREFLIGHT.md). It reports technical facts only and does not yet create a durable asset/revision. SVG sanitization, audit presentation, generation, and export remain unavailable until their corresponding issues are implemented.
 
 ## Security
 
