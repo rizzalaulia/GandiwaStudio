@@ -87,7 +87,11 @@ class CiWorkflowContractTests(unittest.TestCase):
             "uv run --project apps/api alembic -c apps/api/alembic.ini upgrade head",
             migration_runs,
         )
-        self.assertTrue(any("alembic -c apps/api/alembic.ini current" in run for run in migration_runs))
+        self.assertIn(
+            "uv run --project apps/api alembic -c apps/api/alembic.ini current "
+            "| grep -Fxq '0002 (head)'",
+            migration_runs,
+        )
         self.assertIn("GANDIWA_DATABASE_URL: sqlite:///${{ runner.temp }}/gandiwa-ci.sqlite3", migration_job)
 
     def test_ci_runs_its_own_workflow_contract(self) -> None:

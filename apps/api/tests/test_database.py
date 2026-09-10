@@ -77,8 +77,9 @@ def test_explicit_alembic_upgrade_creates_versioned_queue_schema(tmp_path: Path)
     finally:
         engine.dispose()
 
-    assert revision == "0001"
+    assert revision == "0002"
     assert "generation_job" in tables
+    assert "creative_index" in tables
 
 
 def test_migrated_generation_job_has_durable_queue_contract(tmp_path: Path) -> None:
@@ -179,7 +180,7 @@ def test_alembic_downgrade_and_upgrade_are_explicit_and_reversible(tmp_path: Pat
     finally:
         engine.dispose()
 
-    assert revision == "0001"
+    assert revision == "0002"
 
 
 def test_importing_application_does_not_create_database(

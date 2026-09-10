@@ -15,7 +15,9 @@ Python 3.12 FastAPI package foundation. The process probes from Issue #3, the SQ
 - SQLAlchemy 2 typed declarative models with `DeclarativeBase`.
 - `GenerationJob` durable queue model matching the ADR-0001 contract.
 - `WorkerState` singleton table tracking worker process heartbeat.
-- Alembic migration `0001` creates the queue and worker state schema.
+- Alembic migration `0001` creates the queue and worker state schema; `0002` adds the disposable creative index.
+- `gandiwa_api.creative_index.rebuild_creative_index_from_manifest()` validates a portable manifest before transactionally replacing only that project’s cache rows. It stores `project_id`, asset identity/type, revision, and the manifest-relative revision path—never an absolute local path, browser handle, queue state, provider configuration, moderation feedback, or secret. An invalid manifest returns actionable findings and leaves the prior index untouched.
+- The backend cannot inspect a browser-owned project folder. Physical missing-file checks remain a browser import-stage responsibility; this rebuild validates the portable manifest references it receives.
 - SQLite runtime: `foreign_keys=ON`, WAL, configurable busy timeout.
 - Migration is an explicit command (`corepack pnpm migrate`), never automatic on startup.
 - `alembic check` confirms model-migration synchronization.
