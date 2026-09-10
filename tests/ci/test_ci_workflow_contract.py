@@ -59,6 +59,18 @@ class CiWorkflowContractTests(unittest.TestCase):
             }.issubset(job_runs(self.jobs["frontend-quality"]))
         )
 
+    def test_builds_workspace_contracts_before_frontend_quality_gates(self) -> None:
+        frontend_job = self.jobs["frontend-quality"]
+        commands = (
+            "corepack pnpm --filter @gandiwa/contracts build",
+            "corepack pnpm --filter @gandiwa/web lint",
+            "corepack pnpm --filter @gandiwa/web typecheck",
+            "corepack pnpm --filter @gandiwa/web test",
+            "corepack pnpm --filter @gandiwa/web build",
+        )
+        positions = [frontend_job.index(command) for command in commands]
+        self.assertEqual(positions, sorted(positions))
+
     def test_runs_backend_quality_as_a_dedicated_job(self) -> None:
         self.assertTrue(
             {
