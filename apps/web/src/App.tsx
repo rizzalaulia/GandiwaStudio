@@ -7,6 +7,15 @@ import {
   createProject,
   type ProjectCreationResult,
 } from './project-filesystem'
+import {
+  browserProjectLifecycleDependencies,
+  detectExternalManifestChange,
+  loadRememberedProject,
+  openProject,
+  reopenProjectFromUserGesture,
+  type DirectoryHandleLike,
+  type OpenProjectResult,
+} from './project-lifecycle'
 
 type RuntimeStatus = {
   version: string
@@ -19,6 +28,13 @@ type CreateProjectForm = {
   projectName: string
   contentType: ContentType
   creationMethod: CreationMethod
+}
+
+type ActiveProject = Extract<OpenProjectResult, { kind: 'opened' }>
+type ExternalManifestDecision = Readonly<{ source: ActiveProject; external: ActiveProject }>
+
+function isSameActiveProject(left: ActiveProject | null, right: ActiveProject): boolean {
+  return left?.directory === right.directory && left.manifestSnapshot === right.manifestSnapshot
 }
 
 const DEFAULT_CREATE_PROJECT_FORM: CreateProjectForm = {
@@ -37,7 +53,7 @@ async function fetchStatus(): Promise<RuntimeStatus> {
 }
 
 function projectMessage(result: ProjectCreationResult): string {
-  if (result.kind === 'created') return `Project “${result.projectName}” created locally.`
+  if (result.kind === 'created') return `Project “${result.projectName}” created locally.${result.reopenWarning ? ` ${result.reopenWarning}` : ''}`
   if (result.kind === 'cancelled') return 'Project creation cancelled.'
   return result.message
 }
@@ -50,8 +66,15 @@ export function App() {
   const [createForm, setCreateForm] = useState<CreateProjectForm>(DEFAULT_CREATE_PROJECT_FORM)
   const [isCreating, setCreating] = useState(false)
   const [creationMessage, setCreationMessage] = useState<string | null>(null)
+  const [activeProject, setActiveProject] = useState<ActiveProject | null>(null)
+  const [externalManifestDecision, setExternalManifestDecision] = useState<ExternalManifestDecision | null>(null)
+  const [rememberedDirectory, setRememberedDirectory] = useState<DirectoryHandleLike | null>(null)
+  const [isOpening, setOpening] = useState(false)
+  const activeProjectRef = useRef<ActiveProject | null>(null)
   const requestSequence = useRef(0)
   const createProjectOpenerRef = useRef<HTMLButtonElement>(null)
+  const externalChangeCheckerRef = useRef<HTMLButtonElement>(null)
+  const externalManifestReloadRef = useRef<HTMLButtonElement>(null)
 
   const refresh = useCallback(async () => {
     const requestId = ++requestSequence.current
@@ -80,6 +103,24 @@ export function App() {
       requestSequence.current += 1
     }
   }, [refresh])
+
+  useEffect(() => {
+    if (externalManifestDecision) externalManifestReloadRef.current?.focus()
+  }, [externalManifestDecision])
+
+  useEffect(() => {
+    let cancelled = false
+    void loadRememberedProject()
+      .then((directory) => {
+        if (!cancelled) setRememberedDirectory(directory ?? null)
+      })
+      .catch(() => {
+        if (!cancelled) setRememberedDirectory(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const closeCreateDialog = () => {
     createProjectOpenerRef.current?.focus()
@@ -118,12 +159,115 @@ export function App() {
     try {
       const result = await createProject(createForm, browserProjectCreationDependencies())
       setCreationMessage(projectMessage(result))
-      if (result.kind === 'created' || result.kind === 'cancelled') closeCreateDialog()
+      if (result.kind === 'created') {
+        try {
+          setRememberedDirectory((await loadRememberedProject()) ?? null)
+        } catch {
+          setRememberedDirectory(null)
+        }
+        closeCreateDialog()
+      } else if (result.kind === 'cancelled') {
+        closeCreateDialog()
+      }
     } catch (cause) {
       setCreationMessage(cause instanceof Error ? cause.message : 'Unable to create the project. No project was created.')
     } finally {
       setCreating(false)
     }
+  }
+
+  const receiveOpenResult = (result: OpenProjectResult) => {
+    if (result.kind === 'opened') {
+      activeProjectRef.current = result
+      setActiveProject(result)
+      setExternalManifestDecision(null)
+      if (!result.reopenWarning) setRememberedDirectory(result.directory)
+      setCreationMessage(`Project “${result.manifest.project_name}” opened locally.${result.reopenWarning ? ` ${result.reopenWarning}` : ''}`)
+    } else if (result.kind === 'cancelled') {
+      setCreationMessage('Project opening cancelled.')
+    } else {
+      setCreationMessage(result.message)
+    }
+  }
+
+  const handleOpenProject = async () => {
+    setOpening(true)
+    try {
+      receiveOpenResult(await openProject(browserProjectLifecycleDependencies()))
+    } catch (cause) {
+      setCreationMessage(cause instanceof Error ? cause.message : 'Unable to open the selected project folder.')
+    } finally {
+      setOpening(false)
+    }
+  }
+
+  const handleReopenProject = () => {
+    if (!rememberedDirectory) {
+      setCreationMessage('No remembered project is available to reopen.')
+      return
+    }
+    const result = reopenProjectFromUserGesture(rememberedDirectory)
+    setOpening(true)
+    void result
+      .then(receiveOpenResult)
+      .finally(() => setOpening(false))
+  }
+
+  const closeExternalManifestDecision = () => {
+    externalChangeCheckerRef.current?.focus()
+    setExternalManifestDecision(null)
+  }
+
+  const handleExternalChangeDialogKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      closeExternalManifestDecision()
+      return
+    }
+    if (event.key !== 'Tab') return
+
+    const focusable = [...event.currentTarget.querySelectorAll<HTMLElement>('button:not([disabled])')]
+    const first = focusable[0]
+    const last = focusable.at(-1)
+    if (!first || !last) return
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault()
+      last.focus()
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault()
+      first.focus()
+    }
+  }
+
+  const checkExternalManifestChange = async () => {
+    const source = activeProjectRef.current
+    if (!source) return
+    const result = await detectExternalManifestChange(source.directory, source.manifestSnapshot)
+    if (!isSameActiveProject(activeProjectRef.current, source)) return
+    if (result.kind === 'unchanged') {
+      setCreationMessage('Project manifest is unchanged.')
+    } else if (result.kind === 'changed') {
+      setExternalManifestDecision({
+        source,
+        external: { kind: 'opened', directory: source.directory, manifest: result.manifest, manifestSnapshot: result.manifestSnapshot },
+      })
+    } else {
+      setCreationMessage(result.message)
+    }
+  }
+
+  const saveCurrentManifestCopy = () => {
+    const decision = externalManifestDecision
+    if (!decision || !isSameActiveProject(activeProjectRef.current, decision.source)) return
+    const link = document.createElement('a')
+    const blob = new Blob([decision.source.manifestSnapshot], { type: 'application/json' })
+    const objectUrl = URL.createObjectURL(blob)
+    link.href = objectUrl
+    link.download = 'gandiwa-project.external-copy.json'
+    link.click()
+    URL.revokeObjectURL(objectUrl)
+    closeExternalManifestDecision()
+    setCreationMessage('Current manifest was saved as a browser download copy. The project folder was not modified.')
   }
 
   const statusLabel = runtime?.worker.status === 'running' ? 'Worker online' : runtime?.worker.status === 'idle' ? 'Worker idle' : runtime?.worker.status === 'stopped' ? 'Worker stopped' : 'Worker unavailable'
@@ -183,18 +327,46 @@ export function App() {
               <small>Create a local project workspace.</small>
             </span>
           </button>
-          <button className="action-card" disabled>
+          <button className="action-card" aria-label="Open Project" disabled={isOpening} onClick={() => void handleOpenProject()}>
             <span className="action-icon" aria-hidden="true">↥</span>
             <span>
-              <strong>Open Project</strong>
+              <strong>{isOpening ? 'Opening Project…' : 'Open Project'}</strong>
               <small>Open an existing local project folder.</small>
+            </span>
+          </button>
+          <button className="action-card" aria-label="Reopen remembered project" disabled={isOpening || !rememberedDirectory} onClick={handleReopenProject}>
+            <span className="action-icon" aria-hidden="true">⟳</span>
+            <span>
+              <strong>{rememberedDirectory ? 'Reopen remembered project' : 'No remembered project loaded'}</strong>
+              <small>Recover read permission only after you choose this action.</small>
             </span>
           </button>
         </div>
 
         <p className="helper" id="project-actions-help">
-          Create Project uses a Chrome or Edge folder picker. Open Project arrives in the next Stage 2 slice.
+          Create Project and Open Project use a Chrome or Edge folder picker. Reopen uses browser-local handle storage only; it does not sync project files.
         </p>
+
+        {activeProject ? (
+          <section className="panel" aria-label="Active project">
+            <p className="eyebrow">ACTIVE PROJECT</p>
+            <strong>{activeProject.manifest.project_name}</strong>
+            <span>Manifest schema v{activeProject.manifest.schema_version}; {activeProject.manifest.assets.length} assets.</span>
+            <div className="dialog-actions">
+              <button ref={externalChangeCheckerRef} className="button button-secondary" onClick={() => void checkExternalManifestChange()}>Check for external changes</button>
+              <button
+                className="button button-secondary"
+                onClick={() => {
+                  activeProjectRef.current = null
+                  setExternalManifestDecision(null)
+                  setActiveProject(null)
+                }}
+              >
+                Close project
+              </button>
+            </div>
+          </section>
+        ) : null}
 
         <section className="runtime-grid" aria-label="Runtime status">
           <article className="panel">
@@ -209,6 +381,41 @@ export function App() {
           </article>
         </section>
       </section>
+
+      {externalManifestDecision ? (
+        <div className="dialog-backdrop">
+          <section
+            className="create-project-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="external-change-title"
+            onKeyDown={handleExternalChangeDialogKeyDown}
+          >
+            <header>
+              <p className="eyebrow">EXTERNAL CHANGE</p>
+              <h2 id="external-change-title">External manifest change detected</h2>
+              <p>The project folder now contains manifest “{externalManifestDecision.external.manifest.project_name}”. Gandiwa has not written over either version.</p>
+            </header>
+            <div className="dialog-actions">
+              <button
+                ref={externalManifestReloadRef}
+                className="button button-primary"
+                onClick={() => {
+                  if (!isSameActiveProject(activeProjectRef.current, externalManifestDecision.source)) return
+                  activeProjectRef.current = externalManifestDecision.external
+                  setActiveProject(externalManifestDecision.external)
+                  closeExternalManifestDecision()
+                  setCreationMessage(`Reloaded external manifest for “${externalManifestDecision.external.manifest.project_name}”.`)
+                }}
+              >
+                Reload external manifest
+              </button>
+              <button className="button button-secondary" onClick={saveCurrentManifestCopy}>Save current manifest as copy</button>
+              <button className="button button-secondary" onClick={closeExternalManifestDecision}>Cancel external change decision</button>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {isCreateDialogOpen ? (
         <div className="dialog-backdrop">

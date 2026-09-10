@@ -5,6 +5,8 @@ import {
   validateProjectManifest,
 } from '@gandiwa/contracts'
 
+import { rememberProjectDirectory } from './project-handle-store'
+
 const PROJECT_MANIFEST_NAME = 'gandiwa-project.json'
 const PROJECT_TEMP_PREFIX = '.gandiwa-project.'
 const PROJECT_DIRECTORIES = ['sources', 'generated', 'revisions', 'previews', 'metadata', 'reports', 'exports'] as const
@@ -20,7 +22,13 @@ export type ProjectCreationInput = Readonly<{
 }>
 
 export type ProjectCreationResult =
-  | Readonly<{ kind: 'created'; projectName: string; contentType: ContentType; creationMethod: CreationMethod }>
+  | Readonly<{
+    kind: 'created'
+    projectName: string
+    contentType: ContentType
+    creationMethod: CreationMethod
+    reopenWarning?: string
+  }>
   | Readonly<{ kind: 'cancelled' }>
   | Readonly<{ kind: 'error'; message: string }>
 
@@ -43,6 +51,7 @@ export interface FileSystemDirectoryHandleLike {
 export type ProjectCreationDependencies = Readonly<{
   pickDirectory: () => Promise<FileSystemDirectoryHandleLike>
   newId: () => string
+  rememberDirectory?: (directory: FileSystemDirectoryHandleLike) => Promise<void>
   writeManifest?: (directory: FileSystemDirectoryHandleLike, manifest: ProjectManifest) => Promise<void>
 }>
 
@@ -175,17 +184,30 @@ export async function createProject(
   try {
     await createProjectStructure(projectDirectory)
     await (dependencies.writeManifest ?? writeProjectManifestAtomically)(projectDirectory, manifest)
-    return {
-      kind: 'created',
-      projectName,
-      contentType: input.contentType,
-      creationMethod: input.creationMethod,
-    }
   } catch {
     return {
       kind: 'error',
       message: 'Unable to finish the project. Inspect the selected folder before deleting or reusing it.',
     }
+  }
+
+  try {
+    await dependencies.rememberDirectory?.(projectDirectory)
+  } catch {
+    return {
+      kind: 'created',
+      projectName,
+      contentType: input.contentType,
+      creationMethod: input.creationMethod,
+      reopenWarning: 'The project was created, but local reopen access could not be remembered.',
+    }
+  }
+
+  return {
+    kind: 'created',
+    projectName,
+    contentType: input.contentType,
+    creationMethod: input.creationMethod,
   }
 }
 
@@ -197,5 +219,6 @@ export function browserProjectCreationDependencies(): ProjectCreationDependencie
   return {
     pickDirectory: () => picker.call(window),
     newId: () => crypto.randomUUID(),
+    rememberDirectory: (directory) => rememberProjectDirectory(directory),
   }
 }

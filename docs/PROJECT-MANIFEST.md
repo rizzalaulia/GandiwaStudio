@@ -51,6 +51,14 @@ Pengguna memilih **folder proyek kosong** sebagai workspace final. Browser memer
 
 File System Access API melakukan commit isi file saat stream ditutup (`close()`), tetapi tidak menyediakan operasi rename atau create-exclusive directory yang portabel. Untuk folder kosong baru, implementasi menulis temporary manifest, lalu manifest final sebagai commit marker terakhir; temporary file wajib dibersihkan. Bila temporary cleanup tidak dapat dipastikan atau struktur/write manifest gagal, browser **tidak** menghapus folder pilihan otomatis. UI menyuruh pengguna memeriksa folder pilihan sebelum menghapus atau memakainya kembali. Tidak ada janji atomic replace lintas-browser untuk proyek yang sudah ada; Open Project dan save/reopen merupakan tahap terpisah.
 
+## Buka, Tutup, dan Reopen Proyek (Issue #11)
+
+Browser menyimpan satu directory handle proyek terakhir secara browser-local melalui IndexedDB, bukan path absolut, asset proyek, secret, atau mekanisme sync. Saat halaman dibuka, handle hanya dipreload tanpa query/request permission. Saat pengguna menekan **Reopen remembered project**, aplikasi memanggil `requestPermission({ mode: 'read' })` langsung dari aksi klik sebelum operasi async lain, lalu membaca dan memvalidasi manifest. Ini menjaga transient user activation yang diwajibkan browser; tidak ada prompt permission otomatis ketika halaman dibuka. Handle hanya diingat setelah manifest valid dibaca. Bila penyimpanan handle lokal gagal, proyek yang sudah valid tetap terbuka/terbuat pada sesi ini dan UI memberi warning jujur bahwa Reopen lintas sesi belum tersedia.
+
+Open/reopen hanya membaca `gandiwa-project.json` dengan `{ create: false }`, lalu memvalidasinya melalui kontrak schema v1. JSON invalid atau schema lebih baru ditolak tanpa rewrite/destructive migration. Close Project hanya melepas state workspace di layar; folder dan handle browser-local tidak dihapus.
+
+Snapshot byte manifest dicatat saat open. Pemeriksaan perubahan eksternal membaca manifest kembali; bila berbeda, Gandiwa tidak menimpa salah satu versi. Pengguna harus memilih **Reload external manifest**, **Save current manifest as copy** (download browser, bukan write ke folder proyek), atau **Cancel**. Ini bukan built-in sync engine dan tidak melakukan merge otomatis.
+
 ## Batas Rebuild
 
 Manifest dapat dipakai untuk membangun ulang **creative cache/index**: `asset_id`, `content_type`, nomor revision, dan path revision. Ini adalah satu-satunya hasil rebuild yang disediakan kontrak saat ini.
@@ -69,4 +77,4 @@ Tambahkan fixture dahulu saat mengubah schema. Kedua validator harus berubah ber
 
 ## Non-goal Issue #9
 
-Issue #9 menetapkan kontrak dan validator. Issue #10 mengimplementasikan Create Project untuk folder baru saja. Open Project, deteksi perubahan eksternal, save/reopen, dan rebuild index ke SQLite tetap menjadi tahap berikutnya.
+Issue #9 menetapkan kontrak dan validator. Issue #10 mengimplementasikan Create Project untuk folder baru, dan Issue #11 mengimplementasikan Open, Close, Reopen, serta deteksi perubahan manifest eksternal. Rebuild index ke SQLite tetap menjadi tahap berikutnya.

@@ -42,4 +42,4 @@ The payload never returns provider credentials, database URLs, filesystem paths,
 5. Start the web app: `corepack pnpm --filter @gandiwa/web dev`.
 6. Open the Vite address through VS Code Remote SSH port forwarding and inspect `GET /api/v1/status`.
 
-Create Project and Open Project are intentionally visible but disabled in Stage 1. They are implemented in Stage 2 with the File System Access API and atomic manifest writes. No generation action exists in this shell.
+Create Project dan Open Project tersedia pada Tahap 2 melalui File System Access API. Open/reopen memvalidasi manifest secara read-only dan memulihkan permission read hanya dari tindakan pengguna; pemeriksaan perubahan eksternal menahan overwrite dan meminta Reload, download copy, atau Cancel. No generation action exists in this shell.

@@ -88,7 +88,7 @@ pnpm build
 pnpm check
 ```
 
-`pnpm check` runs lint, strict type checks, tests, production builds, and repository verification. Stage 1 exposes `/api/v1/health`, `/api/v1/ready`, and `/api/v1/status`, plus the separate `corepack pnpm worker` command. Stage 2 currently implements Create Project only: current Chrome/Edge can create a new browser-owned local folder and valid empty manifest. Open Project, save/reopen, import, generation, audit, and export remain unavailable until their corresponding stages are implemented.
+`pnpm check` runs lint, strict type checks, tests, production builds, and repository verification. Stage 1 exposes `/api/v1/health`, `/api/v1/ready`, and `/api/v1/status`, plus the separate `corepack pnpm worker` command. Stage 2 currently implements Create Project plus Open, close, and browser-local reopen for valid Chrome/Edge project folders. Reopen uses a browser-local IndexedDB directory handle with explicit permission recovery called directly from the Reopen action; it is not cloud sync. If handle persistence fails after a valid Open/Create, the current project remains available and the UI reports that cross-session Reopen was not saved. The app detects an externally changed manifest and requires reload, browser-download copy, or cancel instead of automatic overwrite. Import, generation, audit, and export remain unavailable until their corresponding stages are implemented.
 
 ## Security
 
