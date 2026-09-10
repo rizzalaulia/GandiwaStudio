@@ -81,8 +81,10 @@ Shared accessible components dari `DESIGN.md`.
 1. Browser meminta directory handle dengan aksi eksplisit pengguna.
 2. Browser memvalidasi permission dan manifest.
 3. Untuk project baru, browser hanya menginisialisasi folder yang kosong saat inspeksi dan dipilih pengguna secara eksplisit; folder berisi ditolak sebelum write. File System Access API tidak menyediakan lock atau create-exclusive lintas tab/proses, maka folder yang sedang diinisialisasi tidak boleh diubah proses lain. Ia menulis temporary manifest dan manifest final sebagai commit marker terakhir; bila cleanup/write gagal, folder pilihan dipertahankan dan pengguna diminta memeriksanya, bukan dihapus otomatis. Atomic replace hanya dipakai jika primitive filesystem/browser nanti benar-benar mendukungnya.
-4. Path absolut tidak disimpan.
-5. Backend yang unavailable tidak menghalangi pembukaan data lokal; fitur backend ditandai unavailable.
+4. Browser boleh menyimpan directory handle terakhir secara IndexedDB same-origin untuk reopen, tetapi tidak menyimpan path absolut, asset, manifest, secret, atau state sync. Reopen hanya dimulai dari aksi pengguna; aplikasi memeriksa lalu, bila perlu, meminta permission read sebelum membaca manifest. Jika persistence handle gagal setelah Open/Create valid, proyek sesi aktif dipertahankan dengan warning Reopen, bukan disalahlabeli sebagai kegagalan proyek.
+5. Manifest selalu dibaca dan divalidasi sebelum project menjadi aktif. JSON invalid atau schema lebih baru ditolak tanpa rewrite.
+6. Snapshot manifest dibandingkan saat pengguna memeriksa perubahan eksternal. Jika berubah, UI menawarkan reload, download copy snapshot lama, atau cancel; tidak ada merge/overwrite otomatis.
+7. Backend yang unavailable tidak menghalangi pembukaan data lokal; fitur backend ditandai unavailable.
 
 ### Submit Long-Running Job
 

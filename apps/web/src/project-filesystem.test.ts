@@ -102,6 +102,36 @@ describe('createProject', () => {
     })
   })
 
+  it('remembers the newly created project directory for browser-session reopen', async () => {
+    const directory = new MemoryDirectory()
+    const rememberDirectory = vi.fn(() => Promise.resolve())
+
+    await expect(
+      createProject(
+        { projectName: 'Burung Laut', contentType: 'photo', creationMethod: 'camera' },
+        { ...dependencies(directory), rememberDirectory },
+      ),
+    ).resolves.toMatchObject({ kind: 'created', projectName: 'Burung Laut' })
+    expect(rememberDirectory).toHaveBeenCalledWith(directory)
+  })
+
+  it('reports a reopen warning but keeps the new project created when local handle storage fails', async () => {
+    const directory = new MemoryDirectory()
+    const rememberDirectory = vi.fn(() => Promise.reject(new Error('IndexedDB quota exceeded')))
+
+    await expect(
+      createProject(
+        { projectName: 'Burung Laut', contentType: 'photo', creationMethod: 'camera' },
+        { ...dependencies(directory), rememberDirectory },
+      ),
+    ).resolves.toMatchObject({
+      kind: 'created',
+      projectName: 'Burung Laut',
+      reopenWarning: 'The project was created, but local reopen access could not be remembered.',
+    })
+    expect(directory.files.get('gandiwa-project.json')).toBeDefined()
+  })
+
   it('rejects a non-empty selected folder before writing project data', async () => {
     const selectedFolder = new MemoryDirectory()
     selectedFolder.directories.set('existing-user-folder', new MemoryDirectory())
