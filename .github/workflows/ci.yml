@@ -85,7 +85,7 @@ jobs:
           GANDIWA_DATABASE_URL: sqlite:///${{ runner.temp }}/gandiwa-ci.sqlite3
           GANDIWA_ARTIFACT_DIR: ${{ runner.temp }}/gandiwa-ci-artifacts
         run: |
-          uv run --project apps/api alembic -c apps/api/alembic.ini current | grep -Fxq '0001 (head)'
+          uv run --project apps/api alembic -c apps/api/alembic.ini current | grep -Fxq '0002 (head)'
 
   ci-workflow-contract:
     name: CI workflow contract
