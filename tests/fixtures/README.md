@@ -14,4 +14,4 @@ Only synthetic, redistributable fixtures may be committed. Never add contributor
 
 `project-manifest/conformance.json` is the single verdict list for portable project-manifest fixtures. Each fixture must be synthetic JSON and declare whether both TypeScript and Python validators must accept it.
 
-The corpus explicitly covers valid raster/vector manifests and rejection of POSIX, Windows-drive, and UNC absolute paths; backslash separators and traversal; duplicate asset IDs/paths; unknown/secret fields; non-integer schema versions; queue/event/artifact durable state; and unsupported creation methods. See `docs/PROJECT-MANIFEST.md` for the schema and rebuild boundary.
+The corpus explicitly covers a valid empty project (before its first asset), valid raster/vector manifests, and rejection of POSIX, Windows-drive, and UNC absolute paths; backslash separators and traversal; duplicate asset IDs/paths; unknown/secret fields; non-integer schema versions; queue/event/artifact durable state; and unsupported creation methods. See `docs/PROJECT-MANIFEST.md` for the schema and rebuild boundary.

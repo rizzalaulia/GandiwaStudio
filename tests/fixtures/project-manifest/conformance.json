@@ -3,6 +3,7 @@
   "cases": [
     { "fixture": "valid-minimal.json", "valid": true },
     { "fixture": "valid-vector.json", "valid": true },
+    { "fixture": "valid-empty-project.json", "valid": true },
     { "fixture": "invalid-revision-outside-revisions.json", "valid": false },
     { "fixture": "invalid-secret-field.json", "valid": false },
     { "fixture": "invalid-schema-boolean.json", "valid": false },

@@ -43,6 +43,14 @@ Schema bersifat allowlist ketat. Field yang tidak dikenal ditolak, termasuk `api
 - Path master wajib memiliki extension yang sama dengan `master_format`.
 - Empat field format tidak boleh digabungkan. Vector selalu SVG. Photo dan Illustration raster memakai kerja raster serta submission JPEG. Illustration native-vector selalu SVG.
 
+## Proyek Baru (Issue #10)
+
+Create Project membuat `gandiwa-project.json` valid dengan `assets: []`. Pilihan `content_type` dan `creation_method` diminta di form sebagai intent asset pertama, tetapi **tidak** ditulis sebagai metadata proyek: schema v1 hanya mengizinkan kedua nilai itu pada asset, sementara asset tanpa revision tidak valid.
+
+Pengguna memilih **folder proyek kosong** sebagai workspace final. Browser memeriksa folder tersebut sebelum menulis; folder yang sudah memuat file atau subfolder pada saat inspeksi ditolak tanpa write maupun delete. File System Access API tidak menyediakan transaksi create-exclusive/lock lintas tab atau proses; pengguna tidak boleh membiarkan proses lain mengubah folder yang sedang diinisialisasi. Nama yang ditampilkan pengguna tetap berada pada `project_name` di manifest. Browser lalu membuat `sources/`, `generated/{photo,illustration,vector}/`, `revisions/`, `previews/`, `metadata/`, `reports/`, dan `exports/` langsung pada folder yang dipilih. Semua detail divalidasi sebelum picker dibuka. Nama proyek tidak boleh kosong, `.`/`..`, slash/backslash, null byte, atau lebih dari 80 karakter.
+
+File System Access API melakukan commit isi file saat stream ditutup (`close()`), tetapi tidak menyediakan operasi rename atau create-exclusive directory yang portabel. Untuk folder kosong baru, implementasi menulis temporary manifest, lalu manifest final sebagai commit marker terakhir; temporary file wajib dibersihkan. Bila temporary cleanup tidak dapat dipastikan atau struktur/write manifest gagal, browser **tidak** menghapus folder pilihan otomatis. UI menyuruh pengguna memeriksa folder pilihan sebelum menghapus atau memakainya kembali. Tidak ada janji atomic replace lintas-browser untuk proyek yang sudah ada; Open Project dan save/reopen merupakan tahap terpisah.
+
 ## Batas Rebuild
 
 Manifest dapat dipakai untuk membangun ulang **creative cache/index**: `asset_id`, `content_type`, nomor revision, dan path revision. Ini adalah satu-satunya hasil rebuild yang disediakan kontrak saat ini.
@@ -61,4 +69,4 @@ Tambahkan fixture dahulu saat mengubah schema. Kedua validator harus berubah ber
 
 ## Non-goal Issue #9
 
-Issue ini menetapkan kontrak dan validator saja. Create/Open Project, File System Access API, penulisan atomic, deteksi perubahan eksternal, dan rebuild index ke SQLite diimplementasikan oleh issue tahap berikutnya.
+Issue #9 menetapkan kontrak dan validator. Issue #10 mengimplementasikan Create Project untuk folder baru saja. Open Project, deteksi perubahan eksternal, save/reopen, dan rebuild index ke SQLite tetap menjadi tahap berikutnya.
