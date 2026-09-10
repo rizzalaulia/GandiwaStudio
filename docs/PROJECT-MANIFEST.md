@@ -65,6 +65,8 @@ Manifest dapat dipakai untuk membangun ulang **creative cache/index**: `asset_id
 
 Manifest tidak memuat dan tidak dapat memulihkan state durable backend, termasuk konfigurasi backend, session/secret, queue dan priority/FIFO, lease/heartbeat, attempt/remote dispatch outcome, event, temporary artifact/expiry, ataupun moderation feedback. State tersebut tetap menjadi tanggung jawab backup SQLite/backend sesuai ADR-0001 dan ADR-0002.
 
+Issue #12 menyediakan rebuild SQLite disposable yang mengganti atomik baris index untuk `project_id` manifest setelah seluruh manifest lolos validasi. Index hanya menyimpan `project_id`, `asset_id`, `content_type`, nomor revision, dan `relative_path`; rebuild yang sama idempotent dan tidak menghapus index proyek lain. Manifest/reference korup menghasilkan finding `invalid_manifest_reference` yang actionable dan meninggalkan index lama apa adanya. Karena backend tidak memegang directory handle atau path absolut folder browser, pemeriksaan apakah file fisik hilang dilakukan browser pada tahap import, bukan oleh rebuild backend.
+
 ## Konformansi TypeScript–Python
 
 Corpus bersama ada di `tests/fixtures/project-manifest/`:

@@ -3,7 +3,16 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, CheckConstraint, DateTime, Index, Integer, String, Text
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    DateTime,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -55,3 +64,25 @@ class WorkerState(Base):
     status: Mapped[str] = mapped_column(String(32), default="idle", server_default="idle")
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CreativeIndex(Base):
+    """Disposable manifest-derived rows; never a source for runtime recovery."""
+
+    __tablename__ = "creative_index"
+    __table_args__ = (
+        Index("ix_creative_index_project", "project_id"),
+        UniqueConstraint(
+            "project_id",
+            "asset_id",
+            "revision",
+            name="uq_creative_index_project_asset_revision",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    asset_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    relative_path: Mapped[str] = mapped_column(String(1024), nullable=False)

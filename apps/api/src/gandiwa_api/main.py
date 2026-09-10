@@ -32,7 +32,7 @@ except PackageNotFoundError:  # pragma: no cover - editable and wheel installs p
 
 # Application-owned contract: Issue #4 must make the Alembic head match this value.
 # Never move this value to environment configuration, which could approve a stale schema.
-EXPECTED_SCHEMA_REVISION = "0001"
+EXPECTED_SCHEMA_REVISION = "0002"
 MVP_VERSION = "mvp-1.0"
 SQLITE_URL_PREFIX = "sqlite:///"
 

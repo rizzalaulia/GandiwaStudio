@@ -29,7 +29,7 @@ async def get(path: str) -> httpx.Response:
 def create_ready_database(
     path: Path,
     *,
-    revision: str = "0001",
+    revision: str = "0002",
     extra_revisions: tuple[str, ...] = (),
     include_queue: bool = True,
 ) -> None:

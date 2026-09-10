@@ -29,7 +29,7 @@ def create_ready_database(
     heartbeat = (heartbeat_at or datetime.now(UTC)).isoformat()
     with sqlite3.connect(path) as connection:
         connection.execute("CREATE TABLE alembic_version (version_num TEXT NOT NULL)")
-        connection.execute("INSERT INTO alembic_version VALUES ('0001')")
+        connection.execute("INSERT INTO alembic_version VALUES ('0002')")
         connection.execute("CREATE TABLE generation_job (id TEXT PRIMARY KEY)")
         connection.execute(
             "CREATE TABLE worker_state "
