@@ -2,9 +2,15 @@
 
 ## Linked issue
 
-Fixes #
+<!--
+Required before submitting this PR:
+1. Replace the next line with exactly one canonical closing reference.
+2. Take the issue number from the branch name <type>/issue-<number>-<slug>.
+3. For example, if the branch contains issue-14, write: Fixes #<issue-number>
+4. Do not leave a blank #, add a second reference, or use a different number.
+-->
 
-Branch contract: use `<type>/issue-<number>-<slug>` and one matching closing reference, for example `feat/issue-8-expand-ci` with `Fixes #8`.
+<!-- WRITE ONE CLOSING REFERENCE HERE -->
 
 ## Verification
 
