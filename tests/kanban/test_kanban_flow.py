@@ -135,6 +135,17 @@ class KanbanFlowTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Fixes #8"):
             kanban_flow.validate_pr_reference("feat/issue-8-expand-ci", "Fixes #9")
 
+    def test_pr_template_has_no_empty_or_numeric_closing_reference_placeholder(self) -> None:
+        template_path = Path(__file__).resolve().parents[2] / ".github" / "PULL_REQUEST_TEMPLATE.md"
+        template = template_path.read_text(encoding="utf-8")
+
+        self.assertNotRegex(
+            template,
+            r"(?im)^\s*(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(?:\s*$|\d+\b)",
+        )
+        self.assertIn("Fixes #<issue-number>", template)
+        self.assertIn("WRITE ONE CLOSING REFERENCE HERE", template)
+
     def test_rejects_missing_or_cyclic_dependency_configuration(self) -> None:
         with self.assertRaisesRegex(ValueError, "missing issue"):
             kanban_flow.validate_dependencies({"8": [404]}, {8})
