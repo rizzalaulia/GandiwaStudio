@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { ContentType, CreationMethod } from '@gandiwa/contracts'
 
+import { preflightRaster, type RasterPreflightReport } from './raster-preflight'
+
 import {
   browserProjectCreationDependencies,
   createProject,
@@ -70,6 +72,10 @@ export function App() {
   const [externalManifestDecision, setExternalManifestDecision] = useState<ExternalManifestDecision | null>(null)
   const [rememberedDirectory, setRememberedDirectory] = useState<DirectoryHandleLike | null>(null)
   const [isOpening, setOpening] = useState(false)
+  const [rasterContentType, setRasterContentType] = useState<Exclude<ContentType, 'vector'>>('photo')
+  const [rasterReport, setRasterReport] = useState<RasterPreflightReport | null>(null)
+  const [rasterMessage, setRasterMessage] = useState<string | null>(null)
+  const [isPreflightingRaster, setPreflightingRaster] = useState(false)
   const activeProjectRef = useRef<ActiveProject | null>(null)
   const requestSequence = useRef(0)
   const createProjectOpenerRef = useRef<HTMLButtonElement>(null)
@@ -213,6 +219,23 @@ export function App() {
       .finally(() => setOpening(false))
   }
 
+  const handleRasterFileSelection = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const input = event.currentTarget
+    const file = input.files?.[0]
+    if (!file) return
+    setPreflightingRaster(true)
+    setRasterReport(null)
+    setRasterMessage(null)
+    try {
+      setRasterReport(await preflightRaster(file, rasterContentType))
+    } catch (cause) {
+      setRasterMessage(cause instanceof Error ? cause.message : 'Raster preflight could not be completed.')
+    } finally {
+      setPreflightingRaster(false)
+      input.value = ''
+    }
+  }
+
   const closeExternalManifestDecision = () => {
     externalChangeCheckerRef.current?.focus()
     setExternalManifestDecision(null)
@@ -352,6 +375,46 @@ export function App() {
             <p className="eyebrow">ACTIVE PROJECT</p>
             <strong>{activeProject.manifest.project_name}</strong>
             <span>Manifest schema v{activeProject.manifest.schema_version}; {activeProject.manifest.assets.length} assets.</span>
+            <section className="raster-preflight" aria-label="Raster technical preflight">
+              <p className="eyebrow">RASTER TECHNICAL PREFLIGHT</p>
+              <p className="helper">Inspect a PNG or JPEG candidate temporarily. This does not write a source, asset, or revision to the project folder.</p>
+              <label htmlFor="raster-content-type">Candidate content type</label>
+              <select
+                id="raster-content-type"
+                value={rasterContentType}
+                disabled={isPreflightingRaster}
+                onChange={(event) => setRasterContentType(event.target.value as Exclude<ContentType, 'vector'>)}
+              >
+                <option value="photo">Photo</option>
+                <option value="illustration">Illustration</option>
+              </select>
+              <label htmlFor="raster-file">Raster file to preflight</label>
+              <input
+                id="raster-file"
+                type="file"
+                accept="image/jpeg,image/png,.jpeg,.jpg,.png"
+                disabled={isPreflightingRaster}
+                onChange={(event) => void handleRasterFileSelection(event)}
+              />
+              {isPreflightingRaster ? <p className="project-result" role="status">Inspecting raster bytes…</p> : null}
+              {rasterMessage ? <p className="project-result" role="alert">{rasterMessage}</p> : null}
+              {rasterReport ? (
+                <div className={`status-card status-${rasterReport.verdict}`}>
+                  <div>
+                    <strong>Technical preflight: {rasterReport.verdict.toUpperCase()}</strong>
+                    <p>
+                      {rasterReport.width ?? 'unknown'} × {rasterReport.height ?? 'unknown'} px · {rasterReport.megapixels ?? 'unknown'} MP · alpha: {rasterReport.has_alpha === null ? 'unknown' : rasterReport.has_alpha ? 'yes' : 'no'}
+                    </p>
+                    <p>Eligible for JPEG submission: {rasterReport.eligible_for_submission ? 'yes' : 'no'}</p>
+                  </div>
+                  {rasterReport.findings.length > 0 ? (
+                    <ul>
+                      {rasterReport.findings.map((finding) => <li key={finding.rule_id}><code>{finding.rule_id}</code>: {finding.message}</li>)}
+                    </ul>
+                  ) : null}
+                </div>
+              ) : null}
+            </section>
             <div className="dialog-actions">
               <button ref={externalChangeCheckerRef} className="button button-secondary" onClick={() => void checkExternalManifestChange()}>Check for external changes</button>
               <button

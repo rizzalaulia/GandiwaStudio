@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import sqlite3
 import tempfile
+from collections.abc import AsyncIterator
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -15,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
 from gandiwa_api.config import Settings
+from gandiwa_api.raster_preflight import DEFAULT_LIMITS, inspect_raster
 from gandiwa_api.security.artifacts import build_artifact_download_response
 from gandiwa_api.security.csrf import (
     SESSION_COOKIE_NAME,
@@ -262,6 +265,36 @@ def list_providers() -> list[ProviderInfo]:
     """List available AI connectors configured on backend without exposing secrets."""
     current_settings = Settings()
     return get_configured_providers(current_settings)
+
+
+async def read_limited_request_body(
+    stream: AsyncIterator[bytes], *, max_bytes: int
+) -> tuple[bytes, bool]:
+    """Read no more than max_bytes plus one sentinel byte from an untrusted stream."""
+    source = bytearray()
+    async for chunk in stream:
+        remaining = max_bytes + 1 - len(source)
+        source.extend(chunk[:remaining])
+        if len(source) > max_bytes:
+            return bytes(source), True
+    return bytes(source), False
+
+
+@app.post("/api/v1/raster/preflight")
+async def preflight_raster(
+    content_type: Literal["photo", "illustration"], request: Request
+) -> JSONResponse:
+    """Inspect a PNG/JPEG request body in memory only; no browser file is persisted."""
+    source, _ = await read_limited_request_body(
+        request.stream(), max_bytes=DEFAULT_LIMITS.max_bytes
+    )
+    report = inspect_raster(
+        bytes(source),
+        declared_mime_type=request.headers.get("content-type", ""),
+        filename=request.headers.get("x-upload-filename", ""),
+        content_type=content_type,
+    )
+    return JSONResponse(content=asdict(report))
 
 
 @app.get("/api/v1/artifacts/{filename}/download")

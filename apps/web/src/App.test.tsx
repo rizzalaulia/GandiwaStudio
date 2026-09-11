@@ -205,6 +205,61 @@ describe('App shell', () => {
     expect((globalThis as { showDirectoryPicker?: unknown }).showDirectoryPicker).toHaveBeenCalledTimes(1)
   })
 
+  it('preflights a selected JPEG for the active project without claiming Adobe-ready', async () => {
+    const manifest = JSON.stringify({
+      schema_version: 1,
+      project_id: 'f0a14fd6-dfca-4d5a-94fa-bb789d8639d3',
+      project_name: 'Burung Laut',
+      assets: [],
+    })
+    const directory = {
+      queryPermission: vi.fn(() => Promise.resolve<'granted'>('granted')),
+      requestPermission: vi.fn(() => Promise.resolve<'granted'>('granted')),
+      getFileHandle: vi.fn(() => Promise.resolve({ getFile: () => Promise.resolve({ text: () => Promise.resolve(manifest) }) })),
+    }
+    vi.stubGlobal('showDirectoryPicker', vi.fn(() => Promise.resolve(directory)))
+    vi.stubGlobal('fetch', vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          version: '0.0.0',
+          mvp_version: 'mvp-1.0',
+          backend: { health: 'ok', ready: true, checks: {} },
+          worker: { status: 'idle', heartbeat_at: null },
+        }),
+      })
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ csrf_token: 'csrf-token' }) })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          verdict: 'pass',
+          detected_mime_type: 'image/jpeg',
+          detected_extension: 'jpeg',
+          width: 2000,
+          height: 2000,
+          megapixels: 4,
+          has_alpha: false,
+          eligible_for_submission: true,
+          findings: [],
+        }),
+      }))
+
+    render(<App />)
+    await waitFor(() => expect(screen.getByText('Backend connected')).toBeVisible())
+    fireEvent.click(screen.getByRole('button', { name: /^Open Project$/i }))
+    await waitFor(() => expect(screen.getByRole('region', { name: 'Active project' })).toHaveTextContent('Burung Laut'))
+
+    const rasterInput = screen.getByLabelText('Raster file to preflight')
+    fireEvent.change(rasterInput, {
+      target: { files: [new File(['synthetic-raster'], 'photo.jpeg', { type: 'image/jpeg' })] },
+    })
+
+    await waitFor(() => expect(screen.getByText('Technical preflight: PASS')).toBeVisible())
+    expect(screen.getByText('Eligible for JPEG submission: yes')).toBeVisible()
+    expect(screen.queryByText(/Adobe-ready/i)).not.toBeInTheDocument()
+  })
+
   it('keeps Reopen available after Open then Close in the same session', async () => {
     const manifest = JSON.stringify({
       schema_version: 1,

@@ -10,6 +10,17 @@ Only synthetic, redistributable fixtures may be committed. Never add contributor
 - fake 9Router/fal.ai success, auth, quota, timeout, invalid-result, and artifact-download responses;
 - approval invalidation and final export gate.
 
+## Raster preflight
+
+`raster-preflight/` contains only synthetic byte fixtures for Issue #14:
+
+- `photo-jpeg-4mp.jpeg`: RGB `2000 × 2000` JPEG (exactly 4 MP);
+- `photo-png-alpha.png`: RGBA `2000 × 2000` PNG (exactly 4 MP);
+- `corrupt.jpeg`: deliberately non-image bytes.
+
+The API tests read these fixture bytes directly. They carry no contributor asset,
+brand, metadata, release, or secret.
+
 ## Project manifest conformance
 
 `project-manifest/conformance.json` is the single verdict list for portable project-manifest fixtures. Each fixture must be synthetic JSON and declare whether both TypeScript and Python validators must accept it.
