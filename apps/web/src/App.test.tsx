@@ -260,6 +260,56 @@ describe('App shell', () => {
     expect(screen.queryByText(/Adobe-ready/i)).not.toBeInTheDocument()
   })
 
+  it('shows only a raster PNG preview after SVG preflight for the active project', async () => {
+    const manifest = JSON.stringify({
+      schema_version: 1,
+      project_id: 'f0a14fd6-dfca-4d5a-94fa-bb789d8639d3',
+      project_name: 'Burung Laut',
+      assets: [],
+    })
+    const directory = {
+      queryPermission: vi.fn(() => Promise.resolve<'granted'>('granted')),
+      requestPermission: vi.fn(() => Promise.resolve<'granted'>('granted')),
+      getFileHandle: vi.fn(() => Promise.resolve({ getFile: () => Promise.resolve({ text: () => Promise.resolve(manifest) }) })),
+    }
+    vi.stubGlobal('showDirectoryPicker', vi.fn(() => Promise.resolve(directory)))
+    vi.stubGlobal('fetch', vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          version: '0.0.0',
+          mvp_version: 'mvp-1.0',
+          backend: { health: 'ok', ready: true, checks: {} },
+          worker: { status: 'idle', heartbeat_at: null },
+        }),
+      })
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ csrf_token: 'csrf-token' }) })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          verdict: 'pass',
+          eligible_for_submission: true,
+          findings: [],
+          preview_url: '/api/v1/svg/preflight/previews/0123456789abcdef0123456789abcdef',
+        }),
+      }))
+
+    render(<App />)
+    await waitFor(() => expect(screen.getByText('Backend connected')).toBeVisible())
+    fireEvent.click(screen.getByRole('button', { name: /^Open Project$/i }))
+    await waitFor(() => expect(screen.getByRole('region', { name: 'Active project' })).toHaveTextContent('Burung Laut'))
+
+    fireEvent.change(screen.getByLabelText('SVG file to preflight'), {
+      target: { files: [new File(['<svg/>'], 'bird.svg', { type: 'image/svg+xml' })] },
+    })
+
+    await waitFor(() => expect(screen.getByText('SVG preflight: PASS')).toBeVisible())
+    const preview = screen.getByRole('img', { name: 'Safe SVG raster preview' })
+    expect(preview).toHaveAttribute('src', '/api/v1/svg/preflight/previews/0123456789abcdef0123456789abcdef')
+    expect(screen.queryByText('<svg/>')).not.toBeInTheDocument()
+  })
+
   it('keeps Reopen available after Open then Close in the same session', async () => {
     const manifest = JSON.stringify({
       schema_version: 1,

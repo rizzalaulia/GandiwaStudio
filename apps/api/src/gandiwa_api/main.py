@@ -14,10 +14,11 @@ from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 from gandiwa_api.config import Settings
-from gandiwa_api.raster_preflight import DEFAULT_LIMITS, inspect_raster
+from gandiwa_api.raster_preflight import DEFAULT_LIMITS as RASTER_PREFLIGHT_LIMITS
+from gandiwa_api.raster_preflight import inspect_raster
 from gandiwa_api.security.artifacts import build_artifact_download_response
 from gandiwa_api.security.csrf import (
     SESSION_COOKIE_NAME,
@@ -27,6 +28,9 @@ from gandiwa_api.security.csrf import (
     verify_session_token,
 )
 from gandiwa_api.security.providers import ProviderInfo, get_configured_providers
+from gandiwa_api.svg_preflight import DEFAULT_LIMITS as SVG_PREFLIGHT_LIMITS
+from gandiwa_api.svg_preflight import inspect_svg
+from gandiwa_api.svg_quarantine import SvgQuarantine
 
 try:
     APP_VERSION = version("gandiwa-api")
@@ -286,7 +290,7 @@ async def preflight_raster(
 ) -> JSONResponse:
     """Inspect a PNG/JPEG request body in memory only; no browser file is persisted."""
     source, _ = await read_limited_request_body(
-        request.stream(), max_bytes=DEFAULT_LIMITS.max_bytes
+        request.stream(), max_bytes=RASTER_PREFLIGHT_LIMITS.max_bytes
     )
     report = inspect_raster(
         bytes(source),
@@ -295,6 +299,60 @@ async def preflight_raster(
         content_type=content_type,
     )
     return JSONResponse(content=asdict(report))
+
+
+@app.post("/api/v1/svg/preflight")
+async def preflight_svg(
+    content_type: Literal["illustration", "vector"], request: Request
+) -> JSONResponse:
+    """Inspect hostile SVG bytes and expose only a short-lived raster preview when safe."""
+    current_settings = Settings()
+    quarantine = SvgQuarantine(
+        current_settings.SVG_QUARANTINE_DIR,
+        ttl_seconds=current_settings.SVG_QUARANTINE_TTL_SECONDS,
+    )
+    quarantine.cleanup_expired()
+    source, _ = await read_limited_request_body(
+        request.stream(), max_bytes=SVG_PREFLIGHT_LIMITS.max_bytes
+    )
+    report = inspect_svg(
+        source,
+        declared_mime_type=request.headers.get("content-type", ""),
+        filename=request.headers.get("x-upload-filename", ""),
+        content_type=content_type,
+    )
+    preview_url: str | None = None
+    if report.preview_png is None:
+        quarantine.store_failed_source(source)
+    else:
+        token = quarantine.store_preview_png(report.preview_png)
+        preview_url = f"/api/v1/svg/preflight/previews/{token}"
+    return JSONResponse(
+        content={
+            "verdict": report.verdict,
+            "eligible_for_submission": report.eligible_for_submission,
+            "findings": [asdict(finding) for finding in report.findings],
+            "preview_url": preview_url,
+        }
+    )
+
+
+@app.get("/api/v1/svg/preflight/previews/{token}")
+def get_svg_preflight_preview(token: str) -> Response:
+    """Serve a temporary raster preview; source SVG bytes are never reachable by this API."""
+    current_settings = Settings()
+    quarantine = SvgQuarantine(
+        current_settings.SVG_QUARANTINE_DIR,
+        ttl_seconds=current_settings.SVG_QUARANTINE_TTL_SECONDS,
+    )
+    preview_png = quarantine.read_preview_png(token)
+    if preview_png is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SVG preview not found")
+    return Response(
+        content=preview_png,
+        media_type="image/png",
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+    )
 
 
 @app.get("/api/v1/artifacts/{filename}/download")

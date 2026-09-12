@@ -51,6 +51,11 @@ def test_fal_is_not_configured_when_its_endpoint_is_not_the_official_https_origi
     assert provider_map["fal"].configured is False
 
 
+def test_settings_reject_non_positive_svg_quarantine_ttl() -> None:
+    with pytest.raises(ValueError, match="SVG_QUARANTINE_TTL_SECONDS"):
+        Settings(SVG_QUARANTINE_TTL_SECONDS=0)
+
+
 def test_production_settings_reject_placeholder_session_secret_and_insecure_cookies() -> None:
     with pytest.raises(ValueError, match="SESSION_SECRET"):
         Settings(

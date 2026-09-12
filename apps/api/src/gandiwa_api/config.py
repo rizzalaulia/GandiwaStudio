@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     DATABASE_BUSY_TIMEOUT_MS: int = 5_000
     WORKER_HEARTBEAT_STALE_SECONDS: int = 5
     ARTIFACT_DIR: Path = Path("./var/artifacts")
+    SVG_QUARANTINE_DIR: Path = Path("./var/svg-quarantine").resolve()
+    SVG_QUARANTINE_TTL_SECONDS: int = 3_600
     SESSION_SECRET: str = Field(
         default=DEVELOPMENT_SESSION_SECRET,
         validation_alias=AliasChoices("GANDIWA_SESSION_SECRET", "SESSION_SECRET"),
@@ -80,6 +82,10 @@ class Settings(BaseSettings):
             raise ValueError("DATABASE_BUSY_TIMEOUT_MS must be greater than or equal to 1")
         if self.WORKER_HEARTBEAT_STALE_SECONDS < 1:
             raise ValueError("WORKER_HEARTBEAT_STALE_SECONDS must be greater than or equal to 1")
+        if not self.SVG_QUARANTINE_DIR.is_absolute():
+            raise ValueError("SVG_QUARANTINE_DIR must be an absolute path")
+        if self.SVG_QUARANTINE_TTL_SECONDS < 1:
+            raise ValueError("SVG_QUARANTINE_TTL_SECONDS must be greater than or equal to 1")
 
         is_production = self.ENV.strip().lower() == "production"
         if is_production:
