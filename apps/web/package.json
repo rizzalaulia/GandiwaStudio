@@ -11,6 +11,7 @@
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
+    "@gandiwa/adobe-rules": "workspace:*",
     "@gandiwa/contracts": "workspace:*",
     "@tanstack/react-query": "5.102.8",
     "react": "19.2.8",

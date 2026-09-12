@@ -31,6 +31,8 @@ jobs:
         run: corepack pnpm install --frozen-lockfile
       - name: Build workspace contracts for frontend consumers
         run: corepack pnpm --filter @gandiwa/contracts build
+      - name: Build Adobe rules for frontend consumers
+        run: corepack pnpm --filter @gandiwa/adobe-rules build
       - name: Lint frontend
         run: corepack pnpm --filter @gandiwa/web lint
       - name: Typecheck frontend

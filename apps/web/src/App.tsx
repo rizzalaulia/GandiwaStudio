@@ -4,6 +4,77 @@ import type { ContentType, CreationMethod } from '@gandiwa/contracts'
 
 import { preflightRaster, type RasterPreflightReport } from './raster-preflight'
 import { preflightSvg, type SvgPreflightReport } from './svg-preflight'
+import { buildAuditCenter, fileAuditIdentity, verdictForFinding, type AuditCenterResult } from './audit-center'
+
+const AUDIT_RULESET_ID = 'adobe-stock-2026-09-08-v1'
+const AUDIT_RULESET_VERSION = AUDIT_RULESET_ID
+
+function auditFromSvgReport(report: SvgPreflightReport, identity: Readonly<{ revisionId: string; checksum: string }>): AuditCenterResult {
+  return buildAuditCenter({
+    assetRevisionId: identity.revisionId,
+    assetChecksum: identity.checksum,
+    rulesetId: AUDIT_RULESET_ID,
+    rulesetVersion: AUDIT_RULESET_VERSION,
+    findings: report.findings.map((finding) => ({
+      ruleId: finding.rule_id,
+      verdict: verdictForFinding(finding.rule_id, report.verdict),
+      message: finding.message,
+      evidence: { source: 'SVG technical preflight', ruleId: finding.rule_id, message: finding.message },
+    })),
+  })
+}
+
+function auditFromRasterReport(report: RasterPreflightReport, identity: Readonly<{ revisionId: string; checksum: string }>): AuditCenterResult {
+  return buildAuditCenter({
+    assetRevisionId: identity.revisionId,
+    assetChecksum: identity.checksum,
+    rulesetId: AUDIT_RULESET_ID,
+    rulesetVersion: AUDIT_RULESET_VERSION,
+    findings: report.findings.map((finding) => ({
+      ruleId: finding.rule_id,
+      verdict: verdictForFinding(finding.rule_id, report.verdict),
+      message: finding.message,
+      evidence: {
+        source: 'Raster technical preflight',
+        ruleId: finding.rule_id,
+        message: finding.message,
+        detectedMimeType: report.detected_mime_type,
+        width: report.width,
+        height: report.height,
+        megapixels: report.megapixels,
+      },
+    })),
+  })
+}
+
+function AuditCenterPanel({ audit }: { audit: AuditCenterResult }) {
+  return (
+    <section className="audit-center" aria-label="Audit Center">
+      <p className="eyebrow">AUDIT CENTER</p>
+      <div className="audit-summary" role="status" aria-label={audit.ariaLabel}>
+        <strong>{audit.statusLabel}</strong>
+        <span>Export gate: {audit.exportGate}</span>
+      </div>
+      <p className="audit-context">
+        Ruleset <code>{audit.ruleset.id}</code> · version <code>{audit.ruleset.version}</code><br />
+        Revision <code>{audit.asset.revisionId}</code> · checksum <code>{audit.asset.checksum}</code>
+      </p>
+      {audit.staleReason ? <p className="audit-stale" role="alert">{audit.staleReason} Run preflight again.</p> : null}
+      {audit.findings.length > 0 ? (
+        <ul className="audit-findings">
+          {audit.findings.map((finding, index) => (
+            <li key={`${finding.ruleId}-${index}`}>
+              <strong><code>{finding.ruleId}</code> · {finding.verdict}</strong>
+              <span>{finding.message}</span>
+              <small>Evidence: {JSON.stringify(finding.evidence)}</small>
+              <small>Remediation: {finding.remediation}</small>
+            </li>
+          ))}
+        </ul>
+      ) : <p className="audit-clear">No deterministic findings. Audit evidence is clear.</p>}
+    </section>
+  )
+}
 
 import {
   browserProjectCreationDependencies,
@@ -81,8 +152,10 @@ export function App() {
   const [svgReport, setSvgReport] = useState<SvgPreflightReport | null>(null)
   const [svgMessage, setSvgMessage] = useState<string | null>(null)
   const [isPreflightingSvg, setPreflightingSvg] = useState(false)
+  const [auditReport, setAuditReport] = useState<AuditCenterResult | null>(null)
   const activeProjectRef = useRef<ActiveProject | null>(null)
   const requestSequence = useRef(0)
+  const preflightSequence = useRef(0)
   const createProjectOpenerRef = useRef<HTMLButtonElement>(null)
   const externalChangeCheckerRef = useRef<HTMLButtonElement>(null)
   const externalManifestReloadRef = useRef<HTMLButtonElement>(null)
@@ -118,6 +191,16 @@ export function App() {
   useEffect(() => {
     if (externalManifestDecision) externalManifestReloadRef.current?.focus()
   }, [externalManifestDecision])
+
+  useEffect(() => {
+    setRasterReport(null)
+    setAuditReport(null)
+  }, [rasterContentType])
+
+  useEffect(() => {
+    setSvgReport(null)
+    setAuditReport(null)
+  }, [svgContentType])
 
   useEffect(() => {
     let cancelled = false
@@ -191,6 +274,9 @@ export function App() {
     if (result.kind === 'opened') {
       activeProjectRef.current = result
       setActiveProject(result)
+      setRasterReport(null)
+      setSvgReport(null)
+      setAuditReport(null)
       setExternalManifestDecision(null)
       if (!result.reopenWarning) setRememberedDirectory(result.directory)
       setCreationMessage(`Project “${result.manifest.project_name}” opened locally.${result.reopenWarning ? ` ${result.reopenWarning}` : ''}`)
@@ -229,10 +315,17 @@ export function App() {
     const file = input.files?.[0]
     if (!file) return
     setPreflightingRaster(true)
+    const requestId = ++preflightSequence.current
     setRasterReport(null)
+    setSvgReport(null)
+    setAuditReport(null)
     setRasterMessage(null)
     try {
-      setRasterReport(await preflightRaster(file, rasterContentType))
+      const report = await preflightRaster(file, rasterContentType)
+      const identity = await fileAuditIdentity(file)
+      if (requestId !== preflightSequence.current) return
+      setRasterReport(report)
+      setAuditReport(auditFromRasterReport(report, identity))
     } catch (cause) {
       setRasterMessage(cause instanceof Error ? cause.message : 'Raster preflight could not be completed.')
     } finally {
@@ -246,10 +339,17 @@ export function App() {
     const file = input.files?.[0]
     if (!file) return
     setPreflightingSvg(true)
+    const requestId = ++preflightSequence.current
     setSvgReport(null)
+    setRasterReport(null)
+    setAuditReport(null)
     setSvgMessage(null)
     try {
-      setSvgReport(await preflightSvg(file, svgContentType))
+      const report = await preflightSvg(file, svgContentType)
+      const identity = await fileAuditIdentity(file)
+      if (requestId !== preflightSequence.current) return
+      setSvgReport(report)
+      setAuditReport(auditFromSvgReport(report, identity))
     } catch (cause) {
       setSvgMessage(cause instanceof Error ? cause.message : 'SVG preflight could not be completed.')
     } finally {
@@ -481,6 +581,7 @@ export function App() {
                 </div>
               ) : null}
             </section>
+            {auditReport ? <AuditCenterPanel audit={auditReport} /> : null}
             <div className="dialog-actions">
               <button ref={externalChangeCheckerRef} className="button button-secondary" onClick={() => void checkExternalManifestChange()}>Check for external changes</button>
               <button
@@ -489,6 +590,9 @@ export function App() {
                   activeProjectRef.current = null
                   setExternalManifestDecision(null)
                   setActiveProject(null)
+                  setRasterReport(null)
+                  setSvgReport(null)
+                  setAuditReport(null)
                 }}
               >
                 Close project

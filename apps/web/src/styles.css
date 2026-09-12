@@ -80,6 +80,20 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .form-note { margin: 14px 0 0; color: var(--subtle); font-size: .84rem; line-height: 1.5; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px; }
 .svg-raster-preview { display: block; width: min(100%, 320px); margin-top: 12px; border: 1px solid var(--line-strong); background: #0f0e0c; image-rendering: auto; }
+.audit-center { margin-top: 20px; border: 1px solid var(--line); background: var(--surface); padding: 18px; }
+.audit-summary { display: flex; justify-content: space-between; gap: 14px; align-items: baseline; margin-top: 10px; }
+.audit-summary strong { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: .02em; }
+.audit-summary span { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .78rem; }
+.audit-context { color: var(--muted); font-size: .78rem; line-height: 1.7; overflow-wrap: anywhere; }
+.audit-context code, .audit-findings code { color: var(--accent); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.audit-findings { display: grid; gap: 10px; padding: 0; list-style: none; }
+.audit-findings li { display: grid; gap: 5px; border-left: 3px solid var(--warning); background: var(--panel); padding: 12px; }
+.audit-findings li strong { font-size: .82rem; }
+.audit-findings li span, .audit-findings li small { color: var(--muted); line-height: 1.45; overflow-wrap: anywhere; }
+.audit-findings li small { font-size: .76rem; }
+.audit-clear { color: var(--success); }
+.audit-stale { border-left: 3px solid var(--danger); color: var(--danger); padding-left: 10px; line-height: 1.45; }
+@media (max-width: 560px) { .audit-summary { align-items: flex-start; flex-direction: column; } }
 
 @media (max-width: 800px) {
   .app-shell { grid-template-columns: 1fr; }

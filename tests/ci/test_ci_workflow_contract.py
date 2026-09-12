@@ -63,6 +63,7 @@ class CiWorkflowContractTests(unittest.TestCase):
         frontend_job = self.jobs["frontend-quality"]
         commands = (
             "corepack pnpm --filter @gandiwa/contracts build",
+            "corepack pnpm --filter @gandiwa/adobe-rules build",
             "corepack pnpm --filter @gandiwa/web lint",
             "corepack pnpm --filter @gandiwa/web typecheck",
             "corepack pnpm --filter @gandiwa/web test",
