@@ -39,6 +39,9 @@ venv/
 *.db-shm
 *.db-wal
 
+# Hermes local handoff
+.hermes-gandiwa-studio-2-handoff.md
+
 # IDE / OS
 .DS_Store
 Thumbs.db

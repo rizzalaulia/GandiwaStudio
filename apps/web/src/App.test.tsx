@@ -308,6 +308,41 @@ describe('App shell', () => {
     const preview = screen.getByRole('img', { name: 'Safe SVG raster preview' })
     expect(preview).toHaveAttribute('src', '/api/v1/svg/preflight/previews/0123456789abcdef0123456789abcdef')
     expect(screen.queryByText('<svg/>')).not.toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Audit Center' })).toHaveTextContent('PASS — export clear')
+    expect(screen.getByRole('region', { name: 'Audit Center' })).toHaveTextContent('adobe-stock-2026-09-08-v1')
+    expect(screen.getByRole('status', { name: /Audit status PASS; export clear/i })).toBeVisible()
+  })
+
+  it('shows blocking audit findings with evidence and remediation text', async () => {
+    const manifest = JSON.stringify({
+      schema_version: 1,
+      project_id: 'f0a14fd6-dfca-4d5a-94fa-bb789d8639d3',
+      project_name: 'Burung Laut',
+      assets: [],
+    })
+    const directory = {
+      queryPermission: vi.fn(() => Promise.resolve<'granted'>('granted')),
+      requestPermission: vi.fn(() => Promise.resolve<'granted'>('granted')),
+      getFileHandle: vi.fn(() => Promise.resolve({ getFile: () => Promise.resolve({ text: () => Promise.resolve(manifest) }) })),
+    }
+    vi.stubGlobal('showDirectoryPicker', vi.fn(() => Promise.resolve(directory)))
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ version: '0.0.0', mvp_version: 'mvp-1.0', backend: { health: 'ok', ready: true, checks: {} }, worker: { status: 'idle', heartbeat_at: null } }) })
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ csrf_token: 'csrf-token' }) })
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ verdict: 'fail', eligible_for_submission: false, findings: [{ rule_id: 'vector.no-raster', message: 'Raster image detected.' }], preview_url: null }) }))
+
+    render(<App />)
+    await waitFor(() => expect(screen.getByText('Backend connected')).toBeVisible())
+    fireEvent.click(screen.getByRole('button', { name: /^Open Project$/i }))
+    await waitFor(() => expect(screen.getByRole('region', { name: 'Active project' })).toHaveTextContent('Burung Laut'))
+    fireEvent.change(screen.getByLabelText('SVG file to preflight'), { target: { files: [new File(['<svg/>'], 'bird.svg', { type: 'image/svg+xml' })] } })
+
+    const audit = await screen.findByRole('region', { name: 'Audit Center' })
+    expect(audit).toHaveTextContent('FAIL — export blocked')
+    expect(audit).toHaveTextContent('vector.no-raster')
+    expect(audit).toHaveTextContent('Evidence:')
+    expect(audit).toHaveTextContent('Remediation: Remove embedded or linked raster images')
+    expect(screen.getByRole('status', { name: /Audit status FAIL; export blocked/i })).toBeVisible()
   })
 
   it('keeps Reopen available after Open then Close in the same session', async () => {
