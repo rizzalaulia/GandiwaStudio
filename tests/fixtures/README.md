@@ -21,6 +21,15 @@ Only synthetic, redistributable fixtures may be committed. Never add contributor
 The API tests read these fixture bytes directly. They carry no contributor asset,
 brand, metadata, release, or secret.
 
+## SVG preflight
+
+`svg-preflight/` contains only synthetic source and parity fixtures for Issue #15:
+
+- `safe-gradient.svg`: a static gradient SVG accepted by the locked MVP profile;
+- `safe-gradient.expected.png`: expected backend-rendered PNG pixels for visual parity.
+
+The SVG test corpus itself also exercises hostile inline byte cases: DTD/entity, script, event handler, `foreignObject`, animation, raster, external URL, local-reference failure, live text, empty path, invalid viewBox, unsafe CSS, unknown static element/attribute, and resource limits. No contributor artwork, private SVG, release, brand asset, or secret belongs in this corpus.
+
 ## Project manifest conformance
 
 `project-manifest/conformance.json` is the single verdict list for portable project-manifest fixtures. Each fixture must be synthetic JSON and declare whether both TypeScript and Python validators must accept it.

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ContentType, CreationMethod } from '@gandiwa/contracts'
 
 import { preflightRaster, type RasterPreflightReport } from './raster-preflight'
+import { preflightSvg, type SvgPreflightReport } from './svg-preflight'
 
 import {
   browserProjectCreationDependencies,
@@ -76,6 +77,10 @@ export function App() {
   const [rasterReport, setRasterReport] = useState<RasterPreflightReport | null>(null)
   const [rasterMessage, setRasterMessage] = useState<string | null>(null)
   const [isPreflightingRaster, setPreflightingRaster] = useState(false)
+  const [svgContentType, setSvgContentType] = useState<Extract<ContentType, 'illustration' | 'vector'>>('vector')
+  const [svgReport, setSvgReport] = useState<SvgPreflightReport | null>(null)
+  const [svgMessage, setSvgMessage] = useState<string | null>(null)
+  const [isPreflightingSvg, setPreflightingSvg] = useState(false)
   const activeProjectRef = useRef<ActiveProject | null>(null)
   const requestSequence = useRef(0)
   const createProjectOpenerRef = useRef<HTMLButtonElement>(null)
@@ -232,6 +237,23 @@ export function App() {
       setRasterMessage(cause instanceof Error ? cause.message : 'Raster preflight could not be completed.')
     } finally {
       setPreflightingRaster(false)
+      input.value = ''
+    }
+  }
+
+  const handleSvgFileSelection = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const input = event.currentTarget
+    const file = input.files?.[0]
+    if (!file) return
+    setPreflightingSvg(true)
+    setSvgReport(null)
+    setSvgMessage(null)
+    try {
+      setSvgReport(await preflightSvg(file, svgContentType))
+    } catch (cause) {
+      setSvgMessage(cause instanceof Error ? cause.message : 'SVG preflight could not be completed.')
+    } finally {
+      setPreflightingSvg(false)
       input.value = ''
     }
   }
@@ -410,6 +432,50 @@ export function App() {
                   {rasterReport.findings.length > 0 ? (
                     <ul>
                       {rasterReport.findings.map((finding) => <li key={finding.rule_id}><code>{finding.rule_id}</code>: {finding.message}</li>)}
+                    </ul>
+                  ) : null}
+                </div>
+              ) : null}
+            </section>
+            <section className="raster-preflight" aria-label="SVG security preflight">
+              <p className="eyebrow">SVG SECURITY PREFLIGHT</p>
+              <p className="helper">Inspect SVG bytes temporarily. Unsafe SVG is never previewed directly; only a temporary PNG raster preview can be displayed.</p>
+              <label htmlFor="svg-content-type">Candidate content type</label>
+              <select
+                id="svg-content-type"
+                value={svgContentType}
+                disabled={isPreflightingSvg}
+                onChange={(event) => setSvgContentType(event.target.value as Extract<ContentType, 'illustration' | 'vector'>)}
+              >
+                <option value="vector">Vector</option>
+                <option value="illustration">Illustration vector</option>
+              </select>
+              <label htmlFor="svg-file">SVG file to preflight</label>
+              <input
+                id="svg-file"
+                type="file"
+                accept="image/svg+xml,.svg"
+                disabled={isPreflightingSvg}
+                onChange={(event) => void handleSvgFileSelection(event)}
+              />
+              {isPreflightingSvg ? <p className="project-result" role="status">Inspecting SVG security boundary…</p> : null}
+              {svgMessage ? <p className="project-result" role="alert">{svgMessage}</p> : null}
+              {svgReport ? (
+                <div className={`status-card status-${svgReport.verdict}`}>
+                  <div>
+                    <strong>SVG preflight: {svgReport.verdict.toUpperCase()}</strong>
+                    <p>Eligible for SVG submission: {svgReport.eligible_for_submission ? 'yes' : 'no'}</p>
+                    {svgReport.preview_url ? (
+                      <img
+                        className="svg-raster-preview"
+                        src={svgReport.preview_url}
+                        alt="Safe SVG raster preview"
+                      />
+                    ) : null}
+                  </div>
+                  {svgReport.findings.length > 0 ? (
+                    <ul>
+                      {svgReport.findings.map((finding) => <li key={finding.rule_id}><code>{finding.rule_id}</code>: {finding.message}</li>)}
                     </ul>
                   ) : null}
                 </div>
