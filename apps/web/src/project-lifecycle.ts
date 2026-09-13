@@ -5,6 +5,7 @@ import { loadRememberedProjectDirectory, rememberProjectDirectory } from './proj
 const PROJECT_MANIFEST_NAME = 'gandiwa-project.json'
 
 type PermissionStateLike = 'granted' | 'denied' | 'prompt'
+type PermissionMode = 'read' | 'readwrite'
 
 export interface FileLike {
   text(): Promise<string>
@@ -16,8 +17,8 @@ export interface FileHandleLike {
 
 export interface DirectoryHandleLike {
   getFileHandle(name: string, options?: { create?: boolean }): Promise<FileHandleLike>
-  queryPermission(descriptor: { mode: 'read' }): Promise<PermissionStateLike>
-  requestPermission(descriptor: { mode: 'read' }): Promise<PermissionStateLike>
+  queryPermission(descriptor: { mode: PermissionMode }): Promise<PermissionStateLike>
+  requestPermission(descriptor: { mode: PermissionMode }): Promise<PermissionStateLike>
 }
 
 export type ProjectLifecycleDependencies = Readonly<{
@@ -45,10 +46,14 @@ function isPickerCancellation(cause: unknown): boolean {
   return cause instanceof DOMException && cause.name === 'AbortError'
 }
 
-async function recoverReadPermission(directory: DirectoryHandleLike): Promise<boolean> {
-  const descriptor = { mode: 'read' } as const
+async function recoverPermission(directory: DirectoryHandleLike, mode: PermissionMode): Promise<boolean> {
+  const descriptor = { mode }
   if (await directory.queryPermission(descriptor) === 'granted') return true
   return (await directory.requestPermission(descriptor)) === 'granted'
+}
+
+export async function requestProjectWritePermission(directory: DirectoryHandleLike): Promise<boolean> {
+  return recoverPermission(directory, 'readwrite')
 }
 
 async function readManifest(directory: DirectoryHandleLike): Promise<Readonly<{ manifest: ProjectManifest; snapshot: string }>> {
@@ -79,7 +84,7 @@ async function readManifest(directory: DirectoryHandleLike): Promise<Readonly<{ 
 
 export async function reopenProject(directory: DirectoryHandleLike): Promise<OpenProjectResult> {
   try {
-    if (!(await recoverReadPermission(directory))) {
+    if (!(await recoverPermission(directory, 'read'))) {
       return { kind: 'error', message: 'Read permission was not granted for the selected project folder.' }
     }
     const { manifest, snapshot } = await readManifest(directory)

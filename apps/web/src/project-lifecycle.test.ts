@@ -85,6 +85,15 @@ describe('project lifecycle', () => {
     })
   })
 
+  it('requests readwrite permission only when a write action explicitly asks for it', async () => {
+    const directory = new MemoryDirectory()
+    const { requestProjectWritePermission } = await import('./project-lifecycle')
+
+    await expect(requestProjectWritePermission(directory)).resolves.toBe(true)
+    expect(directory.queryPermission).toHaveBeenCalledWith({ mode: 'readwrite' })
+    expect(directory.requestPermission).toHaveBeenCalledWith({ mode: 'readwrite' })
+  })
+
   it('preloads the remembered directory without requesting permission', async () => {
     const directory = new MemoryDirectory()
     const { loadRememberedProject } = await import('./project-lifecycle')
