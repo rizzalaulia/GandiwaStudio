@@ -13,9 +13,15 @@ vi.mock('./project-handle-store', () => ({
   rememberProjectDirectory: handleStore.remember,
 }))
 
-import { App } from './App'
+import { App, isCurrentPreflight } from './App'
 
 describe('App shell', () => {
+  it('rejects a preflight response that predates a metadata-save invalidation', () => {
+    const preflightRequest = 1
+    const sequenceAfterMetadataSave = 2
+    expect(isCurrentPreflight(preflightRequest, sequenceAfterMetadataSave)).toBe(false)
+  })
+
   beforeEach(() => {
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
