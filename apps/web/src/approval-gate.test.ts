@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { evaluateApprovalGate, type ApprovalGateInput } from './approval-gate'
+import { evaluateApprovalGate, type ApprovalGateInput, type ApprovalRecord, type DurableAuditSnapshot } from './approval-gate'
 
 const checksum = 'a'.repeat(64)
 const identity = '123e4567-e89b-12d3-a456-426614174000'
-const audit = { schemaVersion: 1 as const, assetId: identity, revision: 2, submissionChecksum: checksum, rulesetId: 'adobe-stock-2026-09-08-v1', rulesetVersion: 'adobe-stock-2026-09-08-v1', findings: [], createdAt: '2026-09-13T00:00:00.000Z' }
+const audit = { schemaVersion: 1 as const, assetId: identity, revision: 2, submissionChecksum: checksum, metadataChecksum: checksum, rulesetId: 'adobe-stock-2026-09-08-v1', rulesetVersion: 'adobe-stock-2026-09-08-v1', findings: [], createdAt: '2026-09-13T00:00:00.000Z' }
 const base = (): ApprovalGateInput => ({ assetId: identity, revision: 2, submissionChecksum: checksum, metadataChecksum: checksum, auditChecksum: checksum, rulesetId: audit.rulesetId, rulesetVersion: audit.rulesetVersion, metadataValid: true, audit })
 
 describe('approval gate', () => {
@@ -12,8 +12,31 @@ describe('approval gate', () => {
     const input = { ...base(), approval: { schemaVersion: 1 as const, status: 'APPROVED' as const, assetId: identity, revision: 2, submissionChecksum: checksum, metadataChecksum: checksum, auditChecksum: checksum, rulesetId: audit.rulesetId, rulesetVersion: audit.rulesetVersion, approvedAt: '2026-09-13T00:00:00.000Z', statementVersion: 1 as const } }
     expect(evaluateApprovalGate(input).status).toBe('APPROVED / ADOBE-READY')
   })
+  it('fails closed for a malformed approval timestamp', () => {
+    const approval = { schemaVersion: 1 as const, status: 'APPROVED' as const, assetId: identity, revision: 2, submissionChecksum: checksum, metadataChecksum: checksum, auditChecksum: checksum, rulesetId: audit.rulesetId, rulesetVersion: audit.rulesetVersion, approvedAt: 'not-a-timestamp', statementVersion: 1 as const }
+    const input = { ...base(), approval: approval as unknown as ApprovalRecord }
+    expect(evaluateApprovalGate(input).status).toBe('STALE / BLOCKED')
+  })
+  it('fails closed for an approval checksum with the wrong shape', () => {
+    const approval = { schemaVersion: 1 as const, status: 'APPROVED' as const, assetId: identity, revision: 2, submissionChecksum: 'not-a-checksum', metadataChecksum: checksum, auditChecksum: checksum, rulesetId: audit.rulesetId, rulesetVersion: audit.rulesetVersion, approvedAt: '2026-09-13T00:00:00.000Z', statementVersion: 1 as const }
+    const input = { ...base(), approval: approval as unknown as ApprovalRecord }
+    expect(evaluateApprovalGate(input).status).toBe('STALE / BLOCKED')
+  })
+  it('fails closed for an audit with a malformed metadata checksum', () => {
+    const malformedAudit = { ...audit, metadataChecksum: 'not-a-checksum' } as unknown as DurableAuditSnapshot
+    expect(evaluateApprovalGate({ ...base(), audit: malformedAudit }).status).toBe('STALE / BLOCKED')
+  })
+  it('fails closed instead of throwing for a malformed audit finding', () => {
+    const malformedAudit = { ...audit, findings: [null] } as unknown as DurableAuditSnapshot
+    expect(() => evaluateApprovalGate({ ...base(), audit: malformedAudit })).not.toThrow()
+    expect(evaluateApprovalGate({ ...base(), audit: malformedAudit }).status).toBe('STALE / BLOCKED')
+  })
   it('blocks a changed submission checksum', () => expect(evaluateApprovalGate({ ...base(), submissionChecksum: 'b'.repeat(64) }).status).toBe('STALE / BLOCKED'))
-  it('keeps warning-only audits eligible for explicit approval', () => expect(evaluateApprovalGate({ ...base(), audit: { ...audit, findings: [{ ruleId: 'warning', verdict: 'WARNING', message: 'review', evidence: {} }] } }).status).toBe('READY FOR HUMAN APPROVAL'))
+  it('marks an approval stale when metadata checksum changes', () => {
+    const approval = { schemaVersion: 1 as const, status: 'APPROVED' as const, assetId: identity, revision: 2, submissionChecksum: checksum, metadataChecksum: checksum, auditChecksum: checksum, rulesetId: audit.rulesetId, rulesetVersion: audit.rulesetVersion, approvedAt: '2026-09-13T00:00:00.000Z', statementVersion: 1 as const }
+    expect(evaluateApprovalGate({ ...base(), metadataChecksum: 'b'.repeat(64), approval }).status).toBe('STALE / BLOCKED')
+  })
+  it('keeps warning-only audits eligible for explicit approval', () => expect(evaluateApprovalGate({ ...base(), audit: { ...audit, findings: [{ ruleId: 'universal.visual-legal-screening', verdict: 'WARNING', message: 'review', evidence: {} }] } }).status).toBe('READY FOR HUMAN APPROVAL'))
   it('blocks missing audit and invalid metadata', () => {
     const withoutAudit = { assetId: identity, revision: 2, submissionChecksum: checksum, metadataChecksum: checksum, auditChecksum: checksum, rulesetId: audit.rulesetId, rulesetVersion: audit.rulesetVersion, metadataValid: true }
     expect(evaluateApprovalGate(withoutAudit).status).toBe('NOT READY')

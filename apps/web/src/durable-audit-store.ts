@@ -16,7 +16,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const HEX = /^[a-f0-9]{64}$/
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/
 const FINDING_KEYS = ['ruleId', 'verdict', 'message', 'evidence'] as const
-const AUDIT_KEYS = ['schemaVersion', 'assetId', 'revision', 'submissionChecksum', 'rulesetId', 'rulesetVersion', 'findings', 'createdAt'] as const
+const AUDIT_KEYS = ['schemaVersion', 'assetId', 'revision', 'submissionChecksum', 'metadataChecksum', 'rulesetId', 'rulesetVersion', 'findings', 'createdAt'] as const
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -46,6 +46,8 @@ export function validateDurableAudit(value: unknown): DurableAuditSnapshot {
     || (value.revision as number) < 1
     || typeof value.submissionChecksum !== 'string'
     || !HEX.test(value.submissionChecksum)
+    || typeof value.metadataChecksum !== 'string'
+    || !HEX.test(value.metadataChecksum)
     || value.rulesetId !== ADOBE_STOCK_MVP_RULESET_ID
     || value.rulesetVersion !== ADOBE_STOCK_MVP_RULESET_ID
     || !Array.isArray(value.findings)
@@ -114,6 +116,7 @@ export async function saveDurableAudit(input: Readonly<{
   manifestSnapshot: string
   audit: DurableAuditSnapshot
   sidecarSnapshot?: string
+  verifyCurrentEvidence?: () => Promise<void>
 }>): Promise<Readonly<{ audit: DurableAuditSnapshot; snapshot: string; checksum: string }>> {
   const audit = validateDurableAudit(input.audit)
   if (await readManifest(input.directory) !== input.manifestSnapshot) throw new Error('project manifest changed externally; reload before saving audit')
@@ -126,6 +129,7 @@ export async function saveDurableAudit(input: Readonly<{
   if (await readManifest(input.directory) !== input.manifestSnapshot || await readFile(audits, name) !== input.sidecarSnapshot) {
     throw new Error('audit changed externally; reload before saving')
   }
+  await input.verifyCurrentEvidence?.()
   const writable = await (await audits.getFileHandle(name, { create: true })).createWritable()
   await writable.write(snapshot)
   await writable.close()

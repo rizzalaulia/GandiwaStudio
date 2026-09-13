@@ -24,14 +24,37 @@ async function read(directory: AuditDirectory, name: string): Promise<string | u
   try { return await (await (await directory.getFileHandle(name, { create: false })).getFile()).text() }
   catch (cause) { if (cause instanceof DOMException && cause.name === 'NotFoundError') return undefined; throw cause }
 }
-async function identity(directory: AuditDirectory, assetId: string, revision: number) {
+async function readNested(directory: AuditDirectory, folders: readonly string[], name: string): Promise<string | undefined> {
+  try {
+    let current = directory
+    for (const folder of folders) current = await current.getDirectoryHandle(folder, { create: false })
+    return await read(current, name)
+  } catch (cause) {
+    if (cause instanceof DOMException && cause.name === 'NotFoundError') return undefined
+    throw cause
+  }
+}
+
+function expectedEvidence(input: Readonly<{ metadataSnapshot: string; auditSnapshot: string }>, metadata: string | undefined, audit: string | undefined): void {
+  if (metadata !== input.metadataSnapshot || audit !== input.auditSnapshot) throw new Error('metadata or audit evidence changed externally; reload and audit again')
+}
+
+async function assertEvidence(directory: AuditDirectory, assetId: string, revision: number, input: Readonly<{ metadataSnapshot: string; auditSnapshot: string }>): Promise<void> {
+  expectedEvidence(
+    input,
+    await readNested(directory, ['metadata'], `${assetId}.json`),
+    await readNested(directory, ['reports', 'audits'], `${assetId}-r${revision}.json`),
+  )
+}
+async function identity(directory: AuditDirectory, assetId: string, revision: number, create: boolean) {
   if (!UUID.test(assetId) || !Number.isInteger(revision) || revision < 1) throw new Error('approval identity is invalid')
   const reports = await directory.getDirectoryHandle('reports', { create: false })
-  return reports.getDirectoryHandle('approvals', { create: true })
+  return reports.getDirectoryHandle('approvals', { create })
 }
 
 export async function loadApproval(directory: AuditDirectory, assetId: string, revision: number): Promise<LoadedApproval | undefined> {
-  const approvals = await identity(directory, assetId, revision)
+  let approvals: AuditDirectory
+  try { approvals = await identity(directory, assetId, revision, false) } catch (cause) { if (cause instanceof DOMException && cause.name === 'NotFoundError') return undefined; throw cause }
   const snapshot = await read(approvals, `${assetId}-r${revision}.json`)
   if (snapshot === undefined) return undefined
   let parsed: unknown
@@ -40,15 +63,17 @@ export async function loadApproval(directory: AuditDirectory, assetId: string, r
   return { record: parsed, snapshot }
 }
 
-export async function saveApproval(input: Readonly<{ directory: AuditDirectory; manifestSnapshot: string; record: ApprovalRecord; existingSnapshot?: string }>): Promise<LoadedApproval> {
+export async function saveApproval(input: Readonly<{ directory: AuditDirectory; manifestSnapshot: string; metadataSnapshot: string; auditSnapshot: string; record: ApprovalRecord; existingSnapshot?: string }>): Promise<LoadedApproval> {
   if (!valid(input.record)) throw new Error('approval record is invalid')
   if (await read(input.directory, 'gandiwa-project.json') !== input.manifestSnapshot) throw new Error('project manifest changed externally; reload before saving approval')
-  const approvals = await identity(input.directory, input.record.assetId, input.record.revision)
+  await assertEvidence(input.directory, input.record.assetId, input.record.revision, input)
+  const approvals = await identity(input.directory, input.record.assetId, input.record.revision, true)
   const name = `${input.record.assetId}-r${input.record.revision}.json`
   const current = await read(approvals, name)
   if (current !== input.existingSnapshot) throw new Error('approval changed externally; reload before saving')
   const snapshot = `${JSON.stringify(input.record, null, 2)}\n`
   if (await read(input.directory, 'gandiwa-project.json') !== input.manifestSnapshot || await read(approvals, name) !== input.existingSnapshot) throw new Error('approval changed externally; reload before saving')
+  await assertEvidence(input.directory, input.record.assetId, input.record.revision, input)
   const writable = await (await approvals.getFileHandle(name, { create: true })).createWritable()
   await writable.write(snapshot)
   await writable.close()
