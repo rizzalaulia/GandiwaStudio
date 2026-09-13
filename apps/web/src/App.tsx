@@ -8,6 +8,11 @@ import { buildAuditCenter, fileAuditIdentity, verdictForFinding, type AuditCente
 import { browserEncodeJpeg, prepareRasterForSubmission } from './raster-preparation'
 import { assessStockMetadata, type AssetProvenance, type StockMetadataDraft } from './stock-metadata'
 import { loadStockMetadata, saveStockMetadata, supportsMetadataWrite, type LoadedStockMetadata } from './stock-metadata-store'
+import { loadDurableAudit, saveDurableAudit } from './durable-audit-store'
+import { loadApproval, saveApproval, type LoadedApproval } from './approval-store'
+import { resolveApprovalSubmission, type ApprovalSubmission, type SubmissionDirectory } from './approval-submission'
+import { evaluateApprovalGate, type ApprovalGateResult, type DurableAuditSnapshot, type ApprovalRecord } from './approval-gate'
+import type { AuditDirectory } from './durable-audit-store'
 
 const AUDIT_RULESET_ID = 'adobe-stock-2026-09-08-v1'
 const AUDIT_RULESET_VERSION = AUDIT_RULESET_ID
@@ -54,16 +59,43 @@ function auditFromRasterReport(report: RasterPreflightReport, identity: Readonly
   })
 }
 
-function ApprovalGatePanel({ audit, metadataValid }: { audit: AuditCenterResult | null; metadataValid: boolean }) {
-  const reasons = audit ? ['Durable asset-bound audit snapshot is not available; ephemeral file audit cannot authorize approval.'] : ['No durable audit snapshot exists.']
-  if (!metadataValid) reasons.push('Metadata is missing or invalid.')
+export function ApprovalGatePanel({
+  gate,
+  asset: assetContext,
+  audit,
+  submission,
+  metadataValid,
+  busy,
+  message,
+  onAudit,
+  onApprove,
+}: {
+  gate: ApprovalGateResult
+  asset: Readonly<{ assetId: string; revision: number }> | null
+  audit: DurableAuditSnapshot | null
+  submission: ApprovalSubmission | null
+  metadataValid: boolean
+  busy: boolean
+  message: string | null
+  onAudit: () => void
+  onApprove: () => void
+}) {
   return (
     <section className="audit-center" aria-label="Approval and Adobe-ready gate">
       <p className="eyebrow">APPROVAL & ADOBE-READY</p>
-      <div className="audit-summary"><strong>STALE / BLOCKED</strong><span>Export gate: BLOCKED</span></div>
-      <p className="audit-stale" role="alert">{reasons.join(' ')}</p>
+      <div className="audit-summary">
+        <strong>{gate.status}</strong>
+        <span>Export gate: {gate.exportGate}</span>
+      </div>
+      {assetContext ? <p className="audit-context">Asset <code>{assetContext.assetId}</code> · revision <code>{assetContext.revision}</code>{submission ? <> · checksum <code>{submission.submissionChecksum}</code></> : null}</p> : null}
+      {audit ? <p className="audit-context">Audit ruleset <code>{audit.rulesetId}</code> · audit checksum is bound to the saved snapshot.</p> : null}
+      {gate.reasons.length > 0 ? <ul className="audit-findings"><li><span>{gate.reasons.join(' ')}</span></li></ul> : null}
       <p className="helper">Adobe-ready berarti gate Gandiwa lolos; ini bukan jaminan Adobe Stock akan menerima submission.</p>
-      <button className="button button-primary" disabled>I confirm this revision for manual Adobe Stock submission</button>
+      {message ? <p className="project-result" role="status">{message}</p> : null}
+      <div className="dialog-actions">
+        <button className="button button-secondary" disabled={busy || !assetContext || !submission || !metadataValid} onClick={onAudit}>{busy ? 'Auditing revision…' : 'Audit prepared revision'}</button>
+        <button className="button button-primary" disabled={busy || !gate.adobeReady && gate.status !== 'READY FOR HUMAN APPROVAL'} onClick={onApprove}>I confirm this revision for manual Adobe Stock submission</button>
+      </div>
     </section>
   )
 }
@@ -189,6 +221,14 @@ export function App() {
   const [svgMessage, setSvgMessage] = useState<string | null>(null)
   const [isPreflightingSvg, setPreflightingSvg] = useState(false)
   const [auditReport, setAuditReport] = useState<AuditCenterResult | null>(null)
+  const [durableAudit, setDurableAudit] = useState<DurableAuditSnapshot | null>(null)
+  const [durableAuditSnapshot, setDurableAuditSnapshot] = useState<string | undefined>(undefined)
+  const [approval, setApproval] = useState<LoadedApproval | null>(null)
+  const [previousApprovalSnapshot, setPreviousApprovalSnapshot] = useState<string | undefined>(undefined)
+  const [approvalSubmission, setApprovalSubmission] = useState<ApprovalSubmission | null>(null)
+  const [approvalGate, setApprovalGate] = useState<ApprovalGateResult>({ status: 'NOT READY', adobeReady: false, exportGate: 'BLOCKED', reasons: ['No active asset revision exists.'] })
+  const [approvalMessage, setApprovalMessage] = useState<string | null>(null)
+  const [isApprovalBusy, setApprovalBusy] = useState(false)
   const [stockMetadata, setStockMetadata] = useState<StockMetadataDraft>(DEFAULT_STOCK_METADATA)
   const [loadedMetadata, setLoadedMetadata] = useState<LoadedStockMetadata | null>(null)
   const [metadataMessage, setMetadataMessage] = useState<string | null>(null)
@@ -310,6 +350,108 @@ export function App() {
     }
   }
 
+  const refreshApprovalContext = async (project: ActiveProject, metadata: LoadedStockMetadata | null = loadedMetadata) => {
+    const asset = project.manifest.assets.at(-1)
+    const revision = asset?.revisions.at(-1)
+    if (!asset || !revision || !metadata) {
+      setApprovalSubmission(null)
+      setDurableAudit(null)
+      setDurableAuditSnapshot(undefined)
+      setApproval(null)
+      setApprovalGate({ status: 'NOT READY', adobeReady: false, exportGate: 'BLOCKED', reasons: ['A prepared revision and valid metadata are required.'] })
+      return
+    }
+    try {
+      const directory = project.directory as unknown as SubmissionDirectory & AuditDirectory
+      const submission = await resolveApprovalSubmission({ directory, manifest: project.manifest, manifestSnapshot: project.manifestSnapshot, assetId: asset.asset_id, revision: revision.revision })
+      const savedAudit = await loadDurableAudit(directory, asset.asset_id, revision.revision)
+      const savedApproval = await loadApproval(directory, asset.asset_id, revision.revision)
+      if (activeProjectRef.current !== project) return
+      setApprovalSubmission(submission)
+      setDurableAudit(savedAudit?.audit ?? null)
+      setDurableAuditSnapshot(savedAudit?.snapshot)
+      setApproval(savedApproval ?? null)
+      setPreviousApprovalSnapshot(savedApproval?.snapshot)
+      setApprovalGate(evaluateApprovalGate({
+        assetId: submission.assetId,
+        revision: submission.revision,
+        submissionChecksum: submission.submissionChecksum,
+        metadataChecksum: submission.metadataChecksum,
+        auditChecksum: savedAudit?.checksum ?? '',
+        rulesetId: AUDIT_RULESET_ID,
+        rulesetVersion: AUDIT_RULESET_VERSION,
+        metadataValid: true,
+        ...(savedAudit ? { audit: savedAudit.audit } : {}),
+        ...(savedApproval ? { approval: savedApproval.record } : {}),
+      }))
+    } catch (cause) {
+      if (activeProjectRef.current !== project) return
+      setApprovalSubmission(null)
+      setDurableAudit(null)
+      setDurableAuditSnapshot(undefined)
+      setApproval(null)
+      setApprovalGate({ status: 'NOT READY', adobeReady: false, exportGate: 'BLOCKED', reasons: [cause instanceof Error ? cause.message : 'Approval evidence could not be loaded.'] })
+    }
+  }
+
+  const auditPreparedRevision = async () => {
+    const project = activeProjectRef.current
+    const asset = project?.manifest.assets.at(-1)
+    const revision = asset?.revisions.at(-1)
+    if (!project || !asset || !revision || !approvalSubmission || !loadedMetadata) return
+    setApprovalBusy(true)
+    setApprovalMessage(null)
+    const requestId = ++preflightSequence.current
+    try {
+      if (!(await requestProjectWritePermission(project.directory))) throw new Error('Write permission was not granted. Audit was not saved.')
+      const report = revision.submission_format === 'svg'
+        ? await preflightSvg(approvalSubmission.file, asset.content_type === 'vector' ? 'vector' : 'illustration')
+        : await preflightRaster(approvalSubmission.file, asset.content_type === 'vector' ? 'photo' : asset.content_type)
+      if (!isCurrentPreflight(requestId, preflightSequence.current)) return
+      const findings = report.findings.map((finding) => ({ ruleId: finding.rule_id, verdict: verdictForFinding(finding.rule_id, report.verdict), message: finding.message, evidence: {} }))
+      const snapshot: DurableAuditSnapshot = { schemaVersion: 1, assetId: asset.asset_id, revision: revision.revision, submissionChecksum: approvalSubmission.submissionChecksum, rulesetId: AUDIT_RULESET_ID, rulesetVersion: AUDIT_RULESET_VERSION, findings, createdAt: new Date().toISOString() }
+      const saved = await saveDurableAudit({ directory: project.directory as unknown as AuditDirectory, manifestSnapshot: project.manifestSnapshot, audit: snapshot, ...(durableAuditSnapshot !== undefined ? { sidecarSnapshot: durableAuditSnapshot } : {}) })
+      if (!isCurrentPreflight(requestId, preflightSequence.current)) return
+      setDurableAudit(saved.audit)
+      setDurableAuditSnapshot(saved.snapshot)
+      setApproval(null)
+      setPreviousApprovalSnapshot(approval?.snapshot ?? previousApprovalSnapshot)
+      setApprovalGate(evaluateApprovalGate({ assetId: asset.asset_id, revision: revision.revision, submissionChecksum: approvalSubmission.submissionChecksum, metadataChecksum: approvalSubmission.metadataChecksum, auditChecksum: saved.checksum, rulesetId: AUDIT_RULESET_ID, rulesetVersion: AUDIT_RULESET_VERSION, metadataValid: true, audit: saved.audit }))
+      setApprovalMessage('Durable audit snapshot saved. Human approval is still required.')
+    } catch (cause) {
+      if (isCurrentPreflight(requestId, preflightSequence.current)) setApprovalMessage(cause instanceof Error ? cause.message : 'Audit could not be saved.')
+    } finally {
+      if (isCurrentPreflight(requestId, preflightSequence.current)) setApprovalBusy(false)
+    }
+  }
+
+  const approveCurrentRevision = async () => {
+    const project = activeProjectRef.current
+    const asset = project?.manifest.assets.at(-1)
+    const revision = asset?.revisions.at(-1)
+    if (!project || !asset || !revision || !durableAudit || !loadedMetadata || approvalGate.status !== 'READY FOR HUMAN APPROVAL') return
+    setApprovalBusy(true)
+    setApprovalMessage(null)
+    try {
+      const directory = project.directory as unknown as SubmissionDirectory & AuditDirectory
+      const submission = await resolveApprovalSubmission({ directory, manifest: project.manifest, manifestSnapshot: project.manifestSnapshot, assetId: asset.asset_id, revision: revision.revision })
+      const loadedAudit = await loadDurableAudit(directory, asset.asset_id, revision.revision)
+      if (!loadedAudit) throw new Error('Audit evidence changed or disappeared. Approval was blocked.')
+      const currentGate = evaluateApprovalGate({ assetId: submission.assetId, revision: submission.revision, submissionChecksum: submission.submissionChecksum, metadataChecksum: submission.metadataChecksum, auditChecksum: loadedAudit.checksum, rulesetId: AUDIT_RULESET_ID, rulesetVersion: AUDIT_RULESET_VERSION, metadataValid: true, audit: loadedAudit.audit })
+      if (currentGate.status !== 'READY FOR HUMAN APPROVAL') { setApprovalGate(currentGate); throw new Error('Approval evidence became stale. Run audit again.') }
+      if (!(await requestProjectWritePermission(project.directory))) throw new Error('Write permission was not granted. Approval was not saved.')
+      const record: ApprovalRecord = { schemaVersion: 1, status: 'APPROVED', assetId: submission.assetId, revision: submission.revision, submissionChecksum: submission.submissionChecksum, metadataChecksum: submission.metadataChecksum, auditChecksum: loadedAudit.checksum, rulesetId: AUDIT_RULESET_ID, rulesetVersion: AUDIT_RULESET_VERSION, approvedAt: new Date().toISOString(), statementVersion: 1 }
+      const saved = await saveApproval({ directory, manifestSnapshot: project.manifestSnapshot, record, ...(previousApprovalSnapshot !== undefined ? { existingSnapshot: previousApprovalSnapshot } : {}) })
+      setApproval(saved)
+      setApprovalGate({ ...currentGate, status: 'APPROVED / ADOBE-READY', adobeReady: true, exportGate: 'CLEAR', reasons: [] })
+      setApprovalMessage('Approval saved locally. This revision is eligible for manual submission.')
+    } catch (cause) {
+      setApprovalMessage(cause instanceof Error ? cause.message : 'Approval could not be saved.')
+    } finally {
+      setApprovalBusy(false)
+    }
+  }
+
   const receiveOpenResult = (result: OpenProjectResult) => {
     if (result.kind === 'opened') {
       activeProjectRef.current = result
@@ -324,6 +466,7 @@ export function App() {
           if (activeProjectRef.current === result && saved) {
             setStockMetadata(saved.metadata)
             setLoadedMetadata(saved)
+            void refreshApprovalContext(result, saved)
           }
         }).catch(() => {
           if (activeProjectRef.current === result) setMetadataMessage('Saved metadata could not be read; it was not modified.')
@@ -335,6 +478,7 @@ export function App() {
       setExternalManifestDecision(null)
       if (!result.reopenWarning) setRememberedDirectory(result.directory)
       setCreationMessage(`Project “${result.manifest.project_name}” opened locally.${result.reopenWarning ? ` ${result.reopenWarning}` : ''}`)
+      void refreshApprovalContext(result, null)
     } else if (result.kind === 'cancelled') {
       setCreationMessage('Project opening cancelled.')
     } else {
@@ -434,6 +578,7 @@ export function App() {
         currentAssetChecksum: saved.checksum,
       }) : null)
       setMetadataMessage(invalidatedAudit ? 'Metadata saved locally. Active audit is stale; run audit again.' : 'Metadata saved locally.')
+      void refreshApprovalContext(project, saved)
     } catch (cause) {
       setMetadataMessage(cause instanceof Error ? cause.message : 'Metadata could not be saved.')
     } finally {
@@ -474,6 +619,8 @@ export function App() {
         currentAssetRevisionId: `${result.assetId}-2`,
         currentAssetChecksum: result.preparation.submission_checksum,
       }) : null)
+      ++preflightSequence.current
+      void refreshApprovalContext(next, null)
       setPreparationMessage(`JPEG submission revision 2 was saved locally. Previous audit evidence is stale; run preflight again.`)
     } catch (cause) {
       setPreparationMessage(cause instanceof Error ? cause.message : 'Raster preparation could not be completed.')
@@ -778,7 +925,7 @@ export function App() {
               ) : <p className="helper">Prepare an asset revision before editing stock metadata.</p>}
             </section>
             {auditReport ? <AuditCenterPanel audit={auditReport} /> : null}
-            {activeProject.manifest.assets.length > 0 ? <ApprovalGatePanel audit={auditReport} metadataValid={Boolean(loadedMetadata)} /> : null}
+            {activeProject.manifest.assets.length > 0 ? <ApprovalGatePanel gate={approvalGate} asset={approvalSubmission ? { assetId: approvalSubmission.assetId, revision: approvalSubmission.revision } : null} audit={durableAudit} submission={approvalSubmission} metadataValid={Boolean(loadedMetadata)} busy={isApprovalBusy} message={approvalMessage} onAudit={() => void auditPreparedRevision()} onApprove={() => void approveCurrentRevision()} /> : null}
             <div className="dialog-actions">
               <button ref={externalChangeCheckerRef} className="button button-secondary" onClick={() => void checkExternalManifestChange()}>Check for external changes</button>
               <button
