@@ -55,7 +55,77 @@ const directory = (root: Node) => ({
   },
 })
 
+async function hashFixture(value: string | Uint8Array): Promise<string> {
+  const bytes = typeof value === 'string' ? new TextEncoder().encode(value) : value
+  const digest = await crypto.subtle.digest('SHA-256', new Uint8Array(bytes).buffer)
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+async function approvedFixture(format: 'jpeg' | 'svg') {
+  const root = node()
+  const submissionBytes = format === 'jpeg'
+    ? new Uint8Array([0xff, 0xd8, 0xff, 0xd9])
+    : new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"></svg>')
+  const submissionChecksum = await hashFixture(submissionBytes)
+  const metadataSnapshot = JSON.stringify({ schemaVersion: 1, title: 'Bird', keywords: ['bird', 'sky', 'sea', 'light', 'nature'], category: 'animals', contentType: format === 'jpeg' ? 'photo' : 'vector', creationMethod: 'camera', generatedWithAi: false, aiDisclosure: '', releaseStatus: 'not_required' }) + '\n'
+  const metadataChecksum = await hashFixture(metadataSnapshot)
+  const manifest = { schema_version: 1 as const, project_id: assetId, project_name: 'Test', assets: [{ asset_id: assetId, content_type: format === 'jpeg' ? 'photo' as const : 'vector' as const, creation_method: 'camera' as const, revisions: [{ revision: 2, generation_format: format, working_format: format, master_format: format, submission_format: format, relative_path: `revisions/${assetId}/2/master.${format}` }] }] }
+  const manifestSnapshot = JSON.stringify(manifest)
+  root.files.set('gandiwa-project.json', new File([manifestSnapshot], 'gandiwa-project.json'))
+  const revisions = node(); const asset = node(); const revision = node()
+  revision.files.set(`master.${format}`, new File([submissionBytes], `master.${format}`))
+  if (format === 'jpeg') revision.files.set('preparation.json', new File([JSON.stringify({ submission_checksum: submissionChecksum })], 'preparation.json'))
+  asset.dirs.set('2', revision); revisions.dirs.set(assetId, asset); root.dirs.set('revisions', revisions)
+  const metadata = node(); metadata.files.set(`${assetId}.json`, new File([metadataSnapshot], `${assetId}.json`)); root.dirs.set('metadata', metadata)
+  const auditSnapshot = JSON.stringify({ schemaVersion: 1, assetId, revision: 2, submissionChecksum, metadataChecksum, rulesetId: 'adobe-stock-2026-09-08-v1', rulesetVersion: 'adobe-stock-2026-09-08-v1', findings: [], createdAt: '2026-09-13T00:00:00.000Z' }) + '\n'
+  const auditChecksum = await hashFixture(auditSnapshot)
+  const approvalSnapshot = JSON.stringify({ schemaVersion: 1, status: 'APPROVED', assetId, revision: 2, submissionChecksum, metadataChecksum, auditChecksum, rulesetId: 'adobe-stock-2026-09-08-v1', rulesetVersion: 'adobe-stock-2026-09-08-v1', approvedAt: '2026-09-13T00:00:00.000Z', statementVersion: 1 }) + '\n'
+  const reports = node(); const audits = node(); const approvals = node()
+  audits.files.set(`${assetId}-r2.json`, new File([auditSnapshot], `${assetId}-r2.json`)); approvals.files.set(`${assetId}-r2.json`, new File([approvalSnapshot], `${assetId}-r2.json`)); reports.dirs.set('audits', audits); reports.dirs.set('approvals', approvals); root.dirs.set('reports', reports)
+  return { root, manifest, manifestSnapshot, submissionChecksum, metadataChecksum, auditSnapshot, auditChecksum, approvalSnapshot }
+}
+
+async function resolveFixture(format: 'jpeg' | 'svg') {
+  const fixture = await approvedFixture(format)
+  const { resolveExportPackageCandidate } = await import('./export-package')
+  const candidate = await resolveExportPackageCandidate({ directory: directory(fixture.root) as never, manifest: fixture.manifest, manifestSnapshot: fixture.manifestSnapshot, assetId, revision: 2 })
+  return { fixture, candidate }
+}
+
 describe('export package contract', () => {
+  it('resolves an approved JPEG candidate end-to-end', async () => {
+    const { fixture, candidate } = await resolveFixture('jpeg')
+    expect(candidate.finalFileName).toBe('final.jpeg')
+    expect(candidate.submissionChecksum).toBe(fixture.submissionChecksum)
+    expect(candidate.metadataChecksum).toBe(fixture.metadataChecksum)
+    expect(candidate.gate.status).toBe('APPROVED / ADOBE-READY')
+    expect(fixture.root.dirs.has('exports')).toBe(false)
+  })
+
+  it('resolves an approved SVG candidate end-to-end', async () => {
+    const { candidate } = await resolveFixture('svg')
+    expect(candidate.finalFileName).toBe('final.svg')
+    expect(candidate.submissionFormat).toBe('svg')
+    expect(candidate.gate.exportGate).toBe('CLEAR')
+  })
+
+  it('rejects a stale audit binding before producing a candidate', async () => {
+    const fixture = await approvedFixture('jpeg')
+    const audit = fixture.root.dirs.get('reports')!.dirs.get('audits')!
+    const file = audit.files.get(`${assetId}-r2.json`)!
+    audit.files.set(`${assetId}-r2.json`, new File([fixture.auditSnapshot.replace(fixture.submissionChecksum, 'f'.repeat(64))], file.name))
+    const { resolveExportPackageCandidate } = await import('./export-package')
+    await expect(resolveExportPackageCandidate({ directory: directory(fixture.root) as never, manifest: fixture.manifest, manifestSnapshot: fixture.manifestSnapshot, assetId, revision: 2 })).rejects.toThrow()
+  })
+
+  it('rejects a malformed audit before producing a candidate', async () => {
+    const fixture = await approvedFixture('jpeg')
+    const audit = fixture.root.dirs.get('reports')!.dirs.get('audits')!
+    audit.files.set(`${assetId}-r2.json`, new File(['{"findings":[null]}'], `${assetId}-r2.json`))
+    const { resolveExportPackageCandidate } = await import('./export-package')
+    await expect(resolveExportPackageCandidate({ directory: directory(fixture.root) as never, manifest: fixture.manifest, manifestSnapshot: fixture.manifestSnapshot, assetId, revision: 2 })).rejects.toThrow(/audit/i)
+  })
+
   it('rejects an externally changed manifest before reading export evidence', async () => {
     const root = node()
     root.files.set('gandiwa-project.json', new File(['changed'], 'gandiwa-project.json'))
