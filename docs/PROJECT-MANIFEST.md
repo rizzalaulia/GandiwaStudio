@@ -73,6 +73,16 @@ Operasi gagal sebelum write bila JPEG hasil kurang dari 4 MP atau encoder tidak 
 
 Jika folder berubah setelah snapshot dibaca, browser menolak sebelum menulis artifact. File System Access API tidak menyediakan transaksi lintas-proses untuk keseluruhan folder; bila write manifest akhir gagal setelah artifact revision ditulis, artifact tersebut adalah recovery data lokal yang harus diperiksa pengguna, dan manifest lama tetap menjadi source of truth.
 
+## Metadata Stock dan AI Disclosure (Issue #18)
+
+Metadata submission disimpan browser-local sebagai sidecar berversi `metadata/<asset-id>.json`, bukan sebagai field tambahan dalam `gandiwa-project.json` schema v1. Sidecar memuat `schemaVersion`, title, daftar keyword berurutan, category, deklarasi submission `contentType`/`creationMethod`, flag `generated_with_ai`, disclosure AI, dan status release (`not_required`, `attached`, atau `needs_review`). Penyimpanan hanya terjadi setelah pengguna memberi permission `readwrite` dari aksi tombol dan browser memastikan snapshot manifest tidak berubah. Manifest tidak dimutasi oleh editor metadata.
+
+Saat membuka proyek, browser membaca dan memvalidasi sidecar asset terakhir tanpa write, termasuk terhadap provenance immutable asset. Sidecar yang secara struktur valid tetapi mengosongkan disclosure untuk asset `generative_ai` juga ditolak tanpa ditulis ulang. Snapshot byte sidecar disimpan pada editor; sebelum save, browser memeriksa ulang manifest dan sidecar. Bila sidecar muncul atau berubah dari tab/proses lain, save ditolak dan pengguna harus reload—tidak ada overwrite diam-diam. File sidecar korup juga ditolak tanpa ditulis ulang.
+
+Editor menampilkan `content_type` dan `creation_method` dari asset sebagai provenance read-only. Sidecar memiliki deklarasi submission `contentType` dan `creationMethod` yang dapat diedit tanpa mengubah sejarah asset di manifest; keduanya bukan pengganti provenance asset. Jika declaration berbeda dari provenance, UI menampilkan warning eksplisit untuk ditinjau sebelum submission. Title, category, dan sedikitnya lima keyword diperlukan. Bila flag AI aktif, `creationMethod` submission adalah `generative_ai`, **atau provenance asset** adalah `generative_ai`, disclosure AI non-kosong tetap wajib. Indikasi keyword brand/trademark atau nama artis hanya warning yang dapat ditinjau manusia; aplikasi tidak menyimpulkan hak atau kelayakan Adobe dari kata semata.
+
+Issue ini belum mengimplementasikan approval/release uploader. Audit Center yang ada masih file-bound dan belum membawa binding durable `asset_id`; karena itu setiap metadata save membuat audit aktif menjadi stale dan export tetap blocked sampai audit baru selesai (fail-closed, bukan menebak kecocokan asset). Sidecar metadata bukan bukti bahwa model/property release sudah diverifikasi atau dilampirkan.
+
 ## Batas Rebuild
 
 Manifest dapat dipakai untuk membangun ulang **creative cache/index**: `asset_id`, `content_type`, nomor revision, dan path revision. Ini adalah satu-satunya hasil rebuild yang disediakan kontrak saat ini.

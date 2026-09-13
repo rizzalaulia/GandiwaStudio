@@ -6,9 +6,15 @@ import { preflightRaster, type RasterPreflightReport } from './raster-preflight'
 import { preflightSvg, type SvgPreflightReport } from './svg-preflight'
 import { buildAuditCenter, fileAuditIdentity, verdictForFinding, type AuditCenterResult } from './audit-center'
 import { browserEncodeJpeg, prepareRasterForSubmission } from './raster-preparation'
+import { assessStockMetadata, type AssetProvenance, type StockMetadataDraft } from './stock-metadata'
+import { loadStockMetadata, saveStockMetadata, supportsMetadataWrite, type LoadedStockMetadata } from './stock-metadata-store'
 
 const AUDIT_RULESET_ID = 'adobe-stock-2026-09-08-v1'
 const AUDIT_RULESET_VERSION = AUDIT_RULESET_ID
+
+export function isCurrentPreflight(requestId: number, currentSequence: number): boolean {
+  return requestId === currentSequence
+}
 
 function auditFromSvgReport(report: SvgPreflightReport, identity: Readonly<{ revisionId: string; checksum: string }>): AuditCenterResult {
   return buildAuditCenter({
@@ -119,6 +125,18 @@ const DEFAULT_CREATE_PROJECT_FORM: CreateProjectForm = {
   creationMethod: 'generative_ai',
 }
 
+const DEFAULT_STOCK_METADATA: StockMetadataDraft = {
+  schemaVersion: 1,
+  title: '',
+  keywords: [],
+  category: '',
+  contentType: 'illustration',
+  creationMethod: 'generative_ai',
+  generatedWithAi: false,
+  aiDisclosure: '',
+  releaseStatus: 'not_required',
+}
+
 async function fetchStatus(): Promise<RuntimeStatus> {
   const response = await fetch('/api/v1/status', {
     credentials: 'same-origin',
@@ -157,6 +175,10 @@ export function App() {
   const [svgMessage, setSvgMessage] = useState<string | null>(null)
   const [isPreflightingSvg, setPreflightingSvg] = useState(false)
   const [auditReport, setAuditReport] = useState<AuditCenterResult | null>(null)
+  const [stockMetadata, setStockMetadata] = useState<StockMetadataDraft>(DEFAULT_STOCK_METADATA)
+  const [loadedMetadata, setLoadedMetadata] = useState<LoadedStockMetadata | null>(null)
+  const [metadataMessage, setMetadataMessage] = useState<string | null>(null)
+  const [isSavingMetadata, setSavingMetadata] = useState(false)
   const activeProjectRef = useRef<ActiveProject | null>(null)
   const requestSequence = useRef(0)
   const preflightSequence = useRef(0)
@@ -278,6 +300,21 @@ export function App() {
     if (result.kind === 'opened') {
       activeProjectRef.current = result
       setActiveProject(result)
+      const latestAsset = result.manifest.assets.at(-1)
+      const defaults = { ...DEFAULT_STOCK_METADATA, contentType: latestAsset?.content_type ?? 'illustration', creationMethod: latestAsset?.creation_method ?? 'generative_ai' }
+      setStockMetadata(defaults)
+      setLoadedMetadata(null)
+      setMetadataMessage(null)
+      if (latestAsset && supportsMetadataWrite(result.directory)) {
+        void loadStockMetadata(result.directory, latestAsset.asset_id, { contentType: latestAsset.content_type, creationMethod: latestAsset.creation_method }).then((saved) => {
+          if (activeProjectRef.current === result && saved) {
+            setStockMetadata(saved.metadata)
+            setLoadedMetadata(saved)
+          }
+        }).catch(() => {
+          if (activeProjectRef.current === result) setMetadataMessage('Saved metadata could not be read; it was not modified.')
+        })
+      }
       setRasterReport(null)
       setSvgReport(null)
       setAuditReport(null)
@@ -327,7 +364,7 @@ export function App() {
     try {
       const report = await preflightRaster(file, rasterContentType)
       const identity = await fileAuditIdentity(file)
-      if (requestId !== preflightSequence.current) return
+      if (!isCurrentPreflight(requestId, preflightSequence.current)) return
       setRasterReport(report)
       setAuditReport(auditFromRasterReport(report, identity))
     } catch (cause) {
@@ -335,6 +372,58 @@ export function App() {
     } finally {
       setPreflightingRaster(false)
       input.value = ''
+    }
+  }
+
+  const saveMetadata = async () => {
+    const project = activeProjectRef.current
+    const asset = project?.manifest.assets.at(-1)
+    if (!project || !asset) {
+      setMetadataMessage('Prepare an asset revision before saving stock metadata.')
+      return
+    }
+    if (!supportsMetadataWrite(project.directory)) {
+      setMetadataMessage('This project handle cannot write metadata. Reopen it with a current Chrome or Edge browser.')
+      return
+    }
+    const provenance: AssetProvenance = { contentType: asset.content_type, creationMethod: asset.creation_method }
+    const assessment = assessStockMetadata(stockMetadata, provenance)
+    if (!assessment.valid) {
+      setMetadataMessage(assessment.errors.join(' '))
+      return
+    }
+    setSavingMetadata(true)
+    setMetadataMessage(null)
+    try {
+      if (!(await requestProjectWritePermission(project.directory))) {
+        setMetadataMessage('Write permission was not granted. Metadata was not saved.')
+        return
+      }
+      const saved = await saveStockMetadata({ directory: project.directory, manifestSnapshot: project.manifestSnapshot, assetId: asset.asset_id, provenance, metadata: stockMetadata, sidecarSnapshot: loadedMetadata?.snapshot })
+      if (activeProjectRef.current !== project) return
+      setStockMetadata(saved.metadata)
+      setLoadedMetadata(saved)
+      // A preflight started before this save must not later resurrect a CLEAR
+      // audit after metadata has made the submission state stale.
+      ++preflightSequence.current
+      const invalidatedAudit = auditReport !== null
+      setAuditReport((previous) => previous ? buildAuditCenter({
+        assetRevisionId: previous.asset.revisionId,
+        assetChecksum: previous.asset.checksum,
+        rulesetId: previous.ruleset.id,
+        rulesetVersion: previous.ruleset.version,
+        findings: previous.findings.map((finding) => ({ ruleId: finding.ruleId, verdict: finding.verdict, message: finding.message, evidence: finding.evidence })),
+        // Current preflight audits are file-bound, not durable asset-bound. Until
+        // the audit workflow receives a durable asset binding, fail closed: no
+        // active audit may remain CLEAR after a metadata save.
+        currentAssetRevisionId: `${previous.asset.revisionId}-metadata-${asset.asset_id}`,
+        currentAssetChecksum: saved.checksum,
+      }) : null)
+      setMetadataMessage(invalidatedAudit ? 'Metadata saved locally. Active audit is stale; run audit again.' : 'Metadata saved locally.')
+    } catch (cause) {
+      setMetadataMessage(cause instanceof Error ? cause.message : 'Metadata could not be saved.')
+    } finally {
+      setSavingMetadata(false)
     }
   }
 
@@ -393,7 +482,7 @@ export function App() {
     try {
       const report = await preflightSvg(file, svgContentType)
       const identity = await fileAuditIdentity(file)
-      if (requestId !== preflightSequence.current) return
+      if (!isCurrentPreflight(requestId, preflightSequence.current)) return
       setSvgReport(report)
       setAuditReport(auditFromSvgReport(report, identity))
     } catch (cause) {
@@ -640,6 +729,39 @@ export function App() {
                   ) : null}
                 </div>
               ) : null}
+            </section>
+            <section className="raster-preflight" aria-label="Stock metadata editor">
+              <p className="eyebrow">STOCK METADATA & AI DISCLOSURE</p>
+              <p className="helper">Saved locally as a metadata sidecar for the latest asset. Asset content type and creation method remain immutable provenance.</p>
+              {activeProject.manifest.assets.at(-1) ? (
+                <>
+                  <p className="helper">Asset provenance: <code>{activeProject.manifest.assets.at(-1)?.asset_id}</code> · type: {activeProject.manifest.assets.at(-1)?.content_type} · method: {activeProject.manifest.assets.at(-1)?.creation_method}</p>
+                  <label htmlFor="stock-content-type">Submission content type</label>
+                  <select id="stock-content-type" value={stockMetadata.contentType} disabled={isSavingMetadata} onChange={(event) => setStockMetadata({ ...stockMetadata, contentType: event.target.value as StockMetadataDraft['contentType'] })}>
+                    <option value="photo">Photo</option><option value="illustration">Illustration</option><option value="vector">Vector</option>
+                  </select>
+                  <label htmlFor="stock-creation-method">Submission creation method</label>
+                  <select id="stock-creation-method" value={stockMetadata.creationMethod} disabled={isSavingMetadata} onChange={(event) => setStockMetadata({ ...stockMetadata, creationMethod: event.target.value as StockMetadataDraft['creationMethod'] })}>
+                    <option value="camera">Camera</option><option value="manual_digital">Manual digital</option><option value="generative_ai">Generative AI</option><option value="mixed">Mixed</option>
+                  </select>
+                  <label htmlFor="stock-title">Title</label>
+                  <input id="stock-title" value={stockMetadata.title} disabled={isSavingMetadata} onChange={(event) => setStockMetadata({ ...stockMetadata, title: event.target.value })} />
+                  <label htmlFor="stock-keywords">Keywords (comma-separated; ordered)</label>
+                  <input id="stock-keywords" value={stockMetadata.keywords.join(', ')} disabled={isSavingMetadata} onChange={(event) => setStockMetadata({ ...stockMetadata, keywords: event.target.value.split(',') })} />
+                  <label htmlFor="stock-category">Category</label>
+                  <input id="stock-category" value={stockMetadata.category} disabled={isSavingMetadata} onChange={(event) => setStockMetadata({ ...stockMetadata, category: event.target.value })} />
+                  <label><input type="checkbox" checked={stockMetadata.generatedWithAi} disabled={isSavingMetadata} onChange={(event) => setStockMetadata({ ...stockMetadata, generatedWithAi: event.target.checked })} /> Generated with AI</label>
+                  <label htmlFor="ai-disclosure">AI disclosure</label>
+                  <textarea id="ai-disclosure" value={stockMetadata.aiDisclosure} disabled={isSavingMetadata} onChange={(event) => setStockMetadata({ ...stockMetadata, aiDisclosure: event.target.value })} />
+                  <label htmlFor="release-status">Release status</label>
+                  <select id="release-status" value={stockMetadata.releaseStatus} disabled={isSavingMetadata} onChange={(event) => setStockMetadata({ ...stockMetadata, releaseStatus: event.target.value as StockMetadataDraft['releaseStatus'] })}>
+                    <option value="not_required">Not required</option><option value="attached">Attached</option><option value="needs_review">Needs review</option>
+                  </select>
+                  {assessStockMetadata(stockMetadata, { contentType: activeProject.manifest.assets.at(-1)!.content_type, creationMethod: activeProject.manifest.assets.at(-1)!.creation_method }).warnings.map((warning) => <p className="helper" key={warning}>Warning: {warning}</p>)}
+                  <button className="button button-primary" disabled={isSavingMetadata || !assessStockMetadata(stockMetadata, { contentType: activeProject.manifest.assets.at(-1)!.content_type, creationMethod: activeProject.manifest.assets.at(-1)!.creation_method }).valid} onClick={() => void saveMetadata()}>{isSavingMetadata ? 'Saving metadata…' : 'Save metadata locally'}</button>
+                  {metadataMessage ? <p className="project-result" role="status">{metadataMessage}</p> : null}
+                </>
+              ) : <p className="helper">Prepare an asset revision before editing stock metadata.</p>}
             </section>
             {auditReport ? <AuditCenterPanel audit={auditReport} /> : null}
             <div className="dialog-actions">
