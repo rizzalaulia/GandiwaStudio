@@ -59,6 +59,20 @@ Open/reopen hanya membaca `gandiwa-project.json` dengan `{ create: false }`, lal
 
 Snapshot byte manifest dicatat saat open. Pemeriksaan perubahan eksternal membaca manifest kembali; bila berbeda, Gandiwa tidak menimpa salah satu versi. Pengguna harus memilih **Reload external manifest**, **Save current manifest as copy** (download browser, bukan write ke folder proyek), atau **Cancel**. Ini bukan built-in sync engine dan tidak melakukan merge otomatis.
 
+## Persiapan Raster JPEG (Issue #17)
+
+Untuk asset raster yang belum memiliki revision durable, pengguna memilih PNG/JPEG melalui aksi **JPEG Submission Preparation** pada project yang terbuka. Browser, bukan backend, melakukan seluruh operasi berikut:
+
+1. membaca snapshot `gandiwa-project.json` yang dibuka dan menolak operasi bila byte manifest berubah dari luar;
+2. menyimpan bytes source apa adanya sebagai `revisions/<asset-id>/1/master.png` atau `master.jpeg`;
+3. menggambar source ke canvas browser pada dimensi asli, dengan latar putih saat JPEG tidak mendukung alpha, tanpa resize/upscale;
+4. menulis JPEG hasil sebagai `revisions/<asset-id>/2/master.jpeg` serta `preparation.json` yang mencatat revision sumber, SHA-256 source dan hasil, quality, dimensi, megapixel, alpha handling, dan color space;
+5. menulis manifest v1 yang valid hanya setelah semua artifact revision selesai ditulis.
+
+Operasi gagal sebelum write bila JPEG hasil kurang dari 4 MP atau encoder tidak menghasilkan struktur JPEG yang valid. Source/master tidak pernah ditimpa. Perubahan revision/checksum membuat hasil Audit Center sebelumnya tidak berlaku; UI membersihkan audit lama dan meminta preflight ulang. Ini hanya menyiapkan kandidat teknis, **bukan** approval manusia, metadata lengkap, export package, atau status `ADOBE_READY`.
+
+Jika folder berubah setelah snapshot dibaca, browser menolak sebelum menulis artifact. File System Access API tidak menyediakan transaksi lintas-proses untuk keseluruhan folder; bila write manifest akhir gagal setelah artifact revision ditulis, artifact tersebut adalah recovery data lokal yang harus diperiksa pengguna, dan manifest lama tetap menjadi source of truth.
+
 ## Batas Rebuild
 
 Manifest dapat dipakai untuk membangun ulang **creative cache/index**: `asset_id`, `content_type`, nomor revision, dan path revision. Ini adalah satu-satunya hasil rebuild yang disediakan kontrak saat ini.

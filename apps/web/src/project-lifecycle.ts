@@ -5,6 +5,7 @@ import { loadRememberedProjectDirectory, rememberProjectDirectory } from './proj
 const PROJECT_MANIFEST_NAME = 'gandiwa-project.json'
 
 type PermissionStateLike = 'granted' | 'denied' | 'prompt'
+type PermissionMode = 'read' | 'readwrite'
 
 export interface FileLike {
   text(): Promise<string>
@@ -16,8 +17,8 @@ export interface FileHandleLike {
 
 export interface DirectoryHandleLike {
   getFileHandle(name: string, options?: { create?: boolean }): Promise<FileHandleLike>
-  queryPermission(descriptor: { mode: 'read' }): Promise<PermissionStateLike>
-  requestPermission(descriptor: { mode: 'read' }): Promise<PermissionStateLike>
+  queryPermission(descriptor: { mode: PermissionMode }): Promise<PermissionStateLike>
+  requestPermission(descriptor: { mode: PermissionMode }): Promise<PermissionStateLike>
 }
 
 export type ProjectLifecycleDependencies = Readonly<{

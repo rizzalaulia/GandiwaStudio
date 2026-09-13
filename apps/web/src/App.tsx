@@ -5,6 +5,7 @@ import type { ContentType, CreationMethod } from '@gandiwa/contracts'
 import { preflightRaster, type RasterPreflightReport } from './raster-preflight'
 import { preflightSvg, type SvgPreflightReport } from './svg-preflight'
 import { buildAuditCenter, fileAuditIdentity, verdictForFinding, type AuditCenterResult } from './audit-center'
+import { browserEncodeJpeg, prepareRasterForSubmission } from './raster-preparation'
 
 const AUDIT_RULESET_ID = 'adobe-stock-2026-09-08-v1'
 const AUDIT_RULESET_VERSION = AUDIT_RULESET_ID
@@ -148,6 +149,8 @@ export function App() {
   const [rasterReport, setRasterReport] = useState<RasterPreflightReport | null>(null)
   const [rasterMessage, setRasterMessage] = useState<string | null>(null)
   const [isPreflightingRaster, setPreflightingRaster] = useState(false)
+  const [isPreparingRaster, setPreparingRaster] = useState(false)
+  const [preparationMessage, setPreparationMessage] = useState<string | null>(null)
   const [svgContentType, setSvgContentType] = useState<Extract<ContentType, 'illustration' | 'vector'>>('vector')
   const [svgReport, setSvgReport] = useState<SvgPreflightReport | null>(null)
   const [svgMessage, setSvgMessage] = useState<string | null>(null)
@@ -331,6 +334,36 @@ export function App() {
     } finally {
       setPreflightingRaster(false)
       input.value = ''
+    }
+  }
+
+  const handleRasterPreparation = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const source = event.currentTarget.files?.[0]
+    const project = activeProjectRef.current
+    if (!source || !project) return
+    setPreparingRaster(true)
+    setPreparationMessage(null)
+    try {
+      const result = await prepareRasterForSubmission({
+        manifest: project.manifest,
+        manifestSnapshot: project.manifestSnapshot,
+        source,
+        contentType: rasterContentType,
+        creationMethod: 'manual_digital',
+        quality: 0.92,
+      }, { directory: project.directory as never, encodeJpeg: browserEncodeJpeg, newId: () => crypto.randomUUID() })
+      if (activeProjectRef.current !== project) return
+      const next: ActiveProject = { ...project, manifest: result.manifest, manifestSnapshot: `${JSON.stringify(result.manifest, null, 2)}\n` }
+      activeProjectRef.current = next
+      setActiveProject(next)
+      setRasterReport(null)
+      setAuditReport(null)
+      setPreparationMessage(`JPEG submission revision ${result.manifest.assets.at(-1)?.revisions.at(-1)?.revision ?? 'new'} was saved locally. Previous audit evidence is stale; run preflight again.`)
+    } catch (cause) {
+      setPreparationMessage(cause instanceof Error ? cause.message : 'Raster preparation could not be completed.')
+    } finally {
+      setPreparingRaster(false)
+      event.currentTarget.value = ''
     }
   }
 
@@ -520,6 +553,20 @@ export function App() {
               />
               {isPreflightingRaster ? <p className="project-result" role="status">Inspecting raster bytes…</p> : null}
               {rasterMessage ? <p className="project-result" role="alert">{rasterMessage}</p> : null}
+              <section className="raster-preparation" aria-label="Raster JPEG preparation">
+                <p className="eyebrow">JPEG SUBMISSION PREPARATION</p>
+                <p className="helper">Copy a PNG or JPEG master into a new local revision, then encode its JPEG submission at quality 92. The original file is not overwritten.</p>
+                <label htmlFor="raster-preparation-file">Raster master to prepare</label>
+                <input
+                  id="raster-preparation-file"
+                  type="file"
+                  accept="image/jpeg,image/png,.jpeg,.jpg,.png"
+                  disabled={isPreparingRaster}
+                  onChange={(event) => void handleRasterPreparation(event)}
+                />
+                {isPreparingRaster ? <p className="project-result" role="status">Preparing JPEG submission revision…</p> : null}
+                {preparationMessage ? <p className="project-result" role="status">{preparationMessage}</p> : null}
+              </section>
               {rasterReport ? (
                 <div className={`status-card status-${rasterReport.verdict}`}>
                   <div>
