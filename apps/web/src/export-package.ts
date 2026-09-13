@@ -249,7 +249,11 @@ export async function writeExportPackage(input: Readonly<{
     const writable = await (await packageDirectory.getFileHandle(file.path, { create: true })).createWritable()
     await writable.write(file.data); await writable.close()
     const bytes = typeof file.data === 'string' ? new TextEncoder().encode(file.data) : file.data
-    entries.push({ path: file.path, sha256: await sha256(bytes), bytes: bytes.byteLength })
+    const fileChecksum = await sha256(bytes)
+    if (file.path === input.candidate.finalFileName && fileChecksum !== input.candidate.submissionChecksum) {
+      throw new Error('submission checksum does not match the approval candidate')
+    }
+    entries.push({ path: file.path, sha256: fileChecksum, bytes: bytes.byteLength })
   }
   await input.verifyCurrentEvidence()
   const exportManifest = buildExportManifest({ assetId: input.candidate.assetId, revision: input.candidate.revision, submissionFormat: input.candidate.submissionFormat, rulesetId: RULESET, rulesetVersion: RULESET, submissionChecksum: input.candidate.submissionChecksum, metadataChecksum: input.candidate.metadataChecksum, auditChecksum: input.candidate.auditChecksum, approvalChecksum: input.candidate.approvalChecksum, files: entries })

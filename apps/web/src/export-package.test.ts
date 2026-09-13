@@ -110,7 +110,7 @@ function candidate(format: 'jpeg' | 'svg'): ExportPackageCandidate {
     approvalSnapshot: '{"approval":true}\n',
     approvalChecksum: 'd'.repeat(64),
     submissionBytes: format === 'jpeg' ? new Uint8Array([0xff, 0xd8, 0xff, 0xd9]) : new TextEncoder().encode('<svg></svg>'),
-    submissionChecksum: 'a'.repeat(64),
+    submissionChecksum: format === 'jpeg' ? '32461d5bd1773012acef0ba15636752949bd7c2ce50f9172159d9f56cf0dd9af' : 'b12e0d83ce2357d80b89c57694814d0a3abdaf8c40724f2049af8b7f01b7812b',
     gate: { status: 'APPROVED / ADOBE-READY', adobeReady: true, exportGate: 'CLEAR', reasons: [] },
   }
 }
@@ -159,6 +159,14 @@ describe('export package writer', () => {
     const packageNode = root.dirs.get('exports')?.dirs.get(result.packageName)
     expect(packageNode?.files.has('final.svg')).toBe(true)
     expect(packageNode?.files.has('final.jpeg')).toBe(false)
+  })
+
+  it('rejects final bytes whose checksum differs from the candidate binding', async () => {
+    const root = writeNode(); root.dirs.set('exports', writeNode())
+    const mismatched = { ...candidate('jpeg'), submissionChecksum: 'f'.repeat(64) }
+    await expect(writeExportPackage({ directory: writableDirectory(root) as never, candidate: mismatched, verifyCurrentEvidence: async () => undefined })).rejects.toThrow(/submission checksum/)
+    const packageNode = root.dirs.get('exports')?.dirs.get(mismatched.packageName)
+    expect(packageNode?.files.has('export-manifest.json')).toBe(false)
   })
 
   it('refuses to overwrite an existing package directory', async () => {
