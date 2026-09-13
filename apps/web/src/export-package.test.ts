@@ -1,9 +1,12 @@
+/* eslint-disable @typescript-eslint/require-await */
 import { describe, expect, it } from 'vitest'
 import {
   buildExportPackageName,
   buildExportManifest,
   validateExportManifest,
+  writeExportPackage,
   type ExportManifest,
+  type ExportPackageCandidate,
 } from './export-package'
 
 const assetId = '123e4567-e89b-12d3-a456-426614174000'
@@ -91,6 +94,85 @@ async function resolveFixture(format: 'jpeg' | 'svg') {
   const candidate = await resolveExportPackageCandidate({ directory: directory(fixture.root) as never, manifest: fixture.manifest, manifestSnapshot: fixture.manifestSnapshot, assetId, revision: 2 })
   return { fixture, candidate }
 }
+
+function candidate(format: 'jpeg' | 'svg'): ExportPackageCandidate {
+  return {
+    assetId,
+    revision: 2,
+    submissionFormat: format,
+    packageName: `${assetId}-r2-${'a'.repeat(16)}`,
+    finalFileName: format === 'jpeg' ? 'final.jpeg' : 'final.svg',
+    manifestSnapshot: '{"schema_version":1}',
+    metadataSnapshot: '{"metadata":true}\n',
+    metadataChecksum: 'b'.repeat(64),
+    auditSnapshot: '{"audit":true}\n',
+    auditChecksum: 'c'.repeat(64),
+    approvalSnapshot: '{"approval":true}\n',
+    approvalChecksum: 'd'.repeat(64),
+    submissionBytes: format === 'jpeg' ? new Uint8Array([0xff, 0xd8, 0xff, 0xd9]) : new TextEncoder().encode('<svg></svg>'),
+    submissionChecksum: 'a'.repeat(64),
+    gate: { status: 'APPROVED / ADOBE-READY', adobeReady: true, exportGate: 'CLEAR', reasons: [] },
+  }
+}
+
+type WriteNode = { files: Map<string, { content: string | Uint8Array }>; dirs: Map<string, WriteNode> }
+const writeNode = (): WriteNode => ({ files: new Map(), dirs: new Map() })
+
+function writableDirectory(root: WriteNode, events: string[] = []) {
+  return {
+    getDirectoryHandle: async (name: string, options?: { create?: boolean }) => {
+      events.push(`dir:${name}:${options?.create === true ? 'create' : 'read'}`)
+      const existing = root.dirs.get(name)
+      if (!existing && !options?.create) throw new DOMException('missing', 'NotFoundError')
+      const result = existing ?? writeNode()
+      root.dirs.set(name, result)
+      return writableDirectory(result, events)
+    },
+    getFileHandle: async (name: string, options?: { create?: boolean }) => {
+      events.push(`file:${name}:${options?.create === true ? 'create' : 'read'}`)
+      const existing = root.files.get(name)
+      if (!existing && !options?.create) throw new DOMException('missing', 'NotFoundError')
+      const result = existing ?? { content: '' }
+      root.files.set(name, result)
+      return {
+        createWritable: async () => ({ write: async (content: string | Uint8Array) => { result.content = content; events.push(`write:${name}`) }, close: async () => { events.push(`close:${name}`) } }),
+      }
+    },
+  }
+}
+
+describe('export package writer', () => {
+  it('writes a JPEG package and writes the completion marker last', async () => {
+    const root = writeNode(); root.dirs.set('exports', writeNode()); const events: string[] = []
+    const result = await writeExportPackage({ directory: writableDirectory(root, events) as never, candidate: candidate('jpeg'), verifyCurrentEvidence: async () => { events.push('verify') } })
+    expect(result.packageName).toBe(`${assetId}-r2-${'a'.repeat(16)}`)
+    const packageNode = root.dirs.get('exports')?.dirs.get(result.packageName)
+    expect(packageNode?.files.has('final.jpeg')).toBe(true)
+    expect(packageNode?.files.has('export-manifest.json')).toBe(true)
+    expect(events.at(-2)).toBe('write:export-manifest.json')
+    expect(events.at(-1)).toBe('close:export-manifest.json')
+  })
+
+  it('writes final.svg for a vector candidate', async () => {
+    const root = writeNode(); root.dirs.set('exports', writeNode())
+    const result = await writeExportPackage({ directory: writableDirectory(root) as never, candidate: candidate('svg'), verifyCurrentEvidence: async () => undefined })
+    const packageNode = root.dirs.get('exports')?.dirs.get(result.packageName)
+    expect(packageNode?.files.has('final.svg')).toBe(true)
+    expect(packageNode?.files.has('final.jpeg')).toBe(false)
+  })
+
+  it('refuses to overwrite an existing package directory', async () => {
+    const root = writeNode(); const exports = writeNode(); root.dirs.set('exports', exports)
+    exports.dirs.set(candidate('jpeg').packageName, writeNode())
+    await expect(writeExportPackage({ directory: writableDirectory(root) as never, candidate: candidate('jpeg'), verifyCurrentEvidence: async () => undefined })).rejects.toThrow(/already exists|overwrite/)
+  })
+
+  it('does not write a completion marker when final verification fails', async () => {
+    const root = writeNode(); root.dirs.set('exports', writeNode())
+    await expect(writeExportPackage({ directory: writableDirectory(root) as never, candidate: candidate('jpeg'), verifyCurrentEvidence: async () => { throw new Error('evidence changed') } })).rejects.toThrow('evidence changed')
+    expect([...root.dirs.values()][0]?.files.has('export-manifest.json')).toBe(false)
+  })
+})
 
 describe('export package contract', () => {
   it('resolves an approved JPEG candidate end-to-end', async () => {

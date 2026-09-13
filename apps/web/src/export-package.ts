@@ -109,14 +109,22 @@ export type ExportPackageCandidate = Readonly<{
   gate: ApprovalGateResult
 }>
 
-export type ExportDirectory = Readonly<{
-  getDirectoryHandle(name: string, options?: { create?: boolean }): Promise<ExportDirectory>
-  getFileHandle(name: string, options?: { create?: boolean }): Promise<Readonly<{ getFile(): Promise<File> }>>
+export type ExportWritable = Readonly<{
+  write(value: string | Uint8Array): Promise<void>
+  close(): Promise<void>
 }>
 
-export type ExportResolverDirectory = ExportDirectory & Readonly<{
-  getFileHandle(name: string, options?: { create?: boolean }): Promise<Readonly<{ getFile(): Promise<File>; createWritable(): Promise<unknown> }>>
+export type ExportFileHandle = Readonly<{
+  getFile(): Promise<File>
+  createWritable(): Promise<ExportWritable>
 }>
+
+export type ExportDirectory = Readonly<{
+  getDirectoryHandle(name: string, options?: { create?: boolean }): Promise<ExportDirectory>
+  getFileHandle(name: string, options?: { create?: boolean }): Promise<ExportFileHandle>
+}>
+
+export type ExportResolverDirectory = ExportDirectory
 
 async function readText(directory: ExportDirectory, name: string): Promise<string | undefined> {
   try {
@@ -151,7 +159,7 @@ export async function resolveExportPackageCandidate(input: Readonly<{
   let submission: Awaited<ReturnType<typeof resolveApprovalSubmission>>
   try {
     submission = await resolveApprovalSubmission({
-      directory: input.directory as unknown as import('./approval-submission').SubmissionDirectory,
+      directory: input.directory,
       manifest: input.manifest,
       manifestSnapshot: input.manifestSnapshot,
       assetId: input.assetId,
@@ -172,9 +180,9 @@ export async function resolveExportPackageCandidate(input: Readonly<{
   if (metadataSnapshot === undefined) throw new Error('metadata is missing; export is blocked')
   const metadataChecksum = await sha256(new TextEncoder().encode(metadataSnapshot))
   if (metadataChecksum !== submission.metadataChecksum) throw new Error('metadata changed while resolving export')
-  const savedAudit = await loadDurableAudit(input.directory as unknown as import('./durable-audit-store').AuditDirectory, input.assetId, input.revision)
+  const savedAudit = await loadDurableAudit(input.directory, input.assetId, input.revision)
   if (!savedAudit) throw new Error('durable audit is missing; export is blocked')
-  const savedApproval = await loadApproval(input.directory as unknown as import('./durable-audit-store').AuditDirectory, input.assetId, input.revision)
+  const savedApproval = await loadApproval(input.directory, input.assetId, input.revision)
   if (!savedApproval) throw new Error('human approval is missing; export is blocked')
   const gate = evaluateApprovalGate({
     assetId: submission.assetId,
@@ -216,6 +224,39 @@ export async function resolveExportPackageCandidate(input: Readonly<{
     submissionChecksum: submission.submissionChecksum,
     gate,
   }
+}
+
+export async function writeExportPackage(input: Readonly<{
+  directory: ExportDirectory
+  candidate: ExportPackageCandidate
+  verifyCurrentEvidence: () => Promise<void>
+}>): Promise<Readonly<{ packageName: string; exportManifest: ExportManifest; exportManifestSnapshot: string }>> {
+  await input.verifyCurrentEvidence()
+  const exports = await input.directory.getDirectoryHandle('exports', { create: false })
+  try { await exports.getDirectoryHandle(input.candidate.packageName, { create: false }); throw new Error('export package already exists; refusing to overwrite') } catch (cause) { if (!(cause instanceof DOMException && cause.name === 'NotFoundError')) throw cause }
+  const packageDirectory = await exports.getDirectoryHandle(input.candidate.packageName, { create: true })
+  await input.verifyCurrentEvidence()
+  const files: Array<{ path: ExportFileName; data: string | Uint8Array }> = [
+    { path: input.candidate.finalFileName, data: input.candidate.submissionBytes },
+    { path: 'metadata.json', data: input.candidate.metadataSnapshot },
+    { path: 'audit-report.json', data: input.candidate.auditSnapshot },
+    { path: 'approval.json', data: input.candidate.approvalSnapshot },
+    { path: 'gandiwa-project.json', data: input.candidate.manifestSnapshot },
+  ]
+  const entries: ExportFileEntry[] = []
+  for (const file of files) {
+    try { await packageDirectory.getFileHandle(file.path, { create: false }); throw new Error(`refusing to overwrite export file: ${file.path}`) } catch (cause) { if (!(cause instanceof DOMException && cause.name === 'NotFoundError')) throw cause }
+    const writable = await (await packageDirectory.getFileHandle(file.path, { create: true })).createWritable()
+    await writable.write(file.data); await writable.close()
+    const bytes = typeof file.data === 'string' ? new TextEncoder().encode(file.data) : file.data
+    entries.push({ path: file.path, sha256: await sha256(bytes), bytes: bytes.byteLength })
+  }
+  await input.verifyCurrentEvidence()
+  const exportManifest = buildExportManifest({ assetId: input.candidate.assetId, revision: input.candidate.revision, submissionFormat: input.candidate.submissionFormat, rulesetId: RULESET, rulesetVersion: RULESET, submissionChecksum: input.candidate.submissionChecksum, metadataChecksum: input.candidate.metadataChecksum, auditChecksum: input.candidate.auditChecksum, approvalChecksum: input.candidate.approvalChecksum, files: entries })
+  const exportManifestSnapshot = `${JSON.stringify(exportManifest, null, 2)}\n`
+  const marker = await (await packageDirectory.getFileHandle('export-manifest.json', { create: true })).createWritable()
+  await marker.write(exportManifestSnapshot); await marker.close()
+  return { packageName: input.candidate.packageName, exportManifest, exportManifestSnapshot }
 }
 
 export function buildExportManifestFromCandidate(input: Readonly<{
