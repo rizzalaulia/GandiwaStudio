@@ -13,13 +13,26 @@ vi.mock('./project-handle-store', () => ({
   rememberProjectDirectory: handleStore.remember,
 }))
 
-import { App, isCurrentPreflight } from './App'
+import { App, isCurrentPreflight, isCurrentProjectPreflight, isSameApprovalEvidence } from './App'
 
 describe('App shell', () => {
   it('rejects a preflight response that predates a metadata-save invalidation', () => {
     const preflightRequest = 1
     const sequenceAfterMetadataSave = 2
     expect(isCurrentPreflight(preflightRequest, sequenceAfterMetadataSave)).toBe(false)
+  })
+
+  it('rejects an old project audit response even when its request sequence still matches', () => {
+    const oldProject = {}
+    const openedProject = {}
+    expect(isCurrentProjectPreflight(7, 7, oldProject, openedProject)).toBe(false)
+  })
+
+  it('rejects durable audit write when preflight evidence differs from re-resolved current evidence', () => {
+    expect(isSameApprovalEvidence(
+      { submissionChecksum: 'a'.repeat(64), metadataChecksum: 'b'.repeat(64) },
+      { submissionChecksum: 'c'.repeat(64), metadataChecksum: 'b'.repeat(64) },
+    )).toBe(false)
   })
 
   beforeEach(() => {
