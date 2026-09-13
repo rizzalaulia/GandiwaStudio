@@ -54,6 +54,20 @@ function auditFromRasterReport(report: RasterPreflightReport, identity: Readonly
   })
 }
 
+function ApprovalGatePanel({ audit, metadataValid }: { audit: AuditCenterResult | null; metadataValid: boolean }) {
+  const reasons = audit ? ['Durable asset-bound audit snapshot is not available; ephemeral file audit cannot authorize approval.'] : ['No durable audit snapshot exists.']
+  if (!metadataValid) reasons.push('Metadata is missing or invalid.')
+  return (
+    <section className="audit-center" aria-label="Approval and Adobe-ready gate">
+      <p className="eyebrow">APPROVAL & ADOBE-READY</p>
+      <div className="audit-summary"><strong>STALE / BLOCKED</strong><span>Export gate: BLOCKED</span></div>
+      <p className="audit-stale" role="alert">{reasons.join(' ')}</p>
+      <p className="helper">Adobe-ready berarti gate Gandiwa lolos; ini bukan jaminan Adobe Stock akan menerima submission.</p>
+      <button className="button button-primary" disabled>I confirm this revision for manual Adobe Stock submission</button>
+    </section>
+  )
+}
+
 function AuditCenterPanel({ audit }: { audit: AuditCenterResult }) {
   return (
     <section className="audit-center" aria-label="Audit Center">
@@ -764,6 +778,7 @@ export function App() {
               ) : <p className="helper">Prepare an asset revision before editing stock metadata.</p>}
             </section>
             {auditReport ? <AuditCenterPanel audit={auditReport} /> : null}
+            {activeProject.manifest.assets.length > 0 ? <ApprovalGatePanel audit={auditReport} metadataValid={Boolean(loadedMetadata)} /> : null}
             <div className="dialog-actions">
               <button ref={externalChangeCheckerRef} className="button button-secondary" onClick={() => void checkExternalManifestChange()}>Check for external changes</button>
               <button
