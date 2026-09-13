@@ -148,16 +148,30 @@ export async function resolveExportPackageCandidate(input: Readonly<{
 
   const currentManifest = await readText(input.directory, 'gandiwa-project.json')
   if (currentManifest !== input.manifestSnapshot) throw new Error('project manifest changed externally; reload before export')
-  const submission = await resolveApprovalSubmission({
-    directory: input.directory as unknown as import('./approval-submission').SubmissionDirectory,
-    manifest: input.manifest,
-    manifestSnapshot: input.manifestSnapshot,
-    assetId: input.assetId,
-    revision: input.revision,
-  })
-  const metadataDirectory = await input.directory.getDirectoryHandle('metadata', { create: false })
+  let submission: Awaited<ReturnType<typeof resolveApprovalSubmission>>
+  try {
+    submission = await resolveApprovalSubmission({
+      directory: input.directory as unknown as import('./approval-submission').SubmissionDirectory,
+      manifest: input.manifest,
+      manifestSnapshot: input.manifestSnapshot,
+      assetId: input.assetId,
+      revision: input.revision,
+    })
+  } catch (cause) {
+    if (cause instanceof DOMException && cause.name === 'NotFoundError') throw new Error('metadata is missing; export is blocked', { cause })
+    throw cause
+  }
+  let metadataDirectory: ExportDirectory
+  try {
+    metadataDirectory = await input.directory.getDirectoryHandle('metadata', { create: false })
+  } catch (cause) {
+    if (cause instanceof DOMException && cause.name === 'NotFoundError') throw new Error('metadata is missing; export is blocked', { cause })
+    throw cause
+  }
   const metadataSnapshot = await readText(metadataDirectory, `${input.assetId}.json`)
   if (metadataSnapshot === undefined) throw new Error('metadata is missing; export is blocked')
+  const metadataChecksum = await sha256(new TextEncoder().encode(metadataSnapshot))
+  if (metadataChecksum !== submission.metadataChecksum) throw new Error('metadata changed while resolving export')
   const savedAudit = await loadDurableAudit(input.directory as unknown as import('./durable-audit-store').AuditDirectory, input.assetId, input.revision)
   if (!savedAudit) throw new Error('durable audit is missing; export is blocked')
   const savedApproval = await loadApproval(input.directory as unknown as import('./durable-audit-store').AuditDirectory, input.assetId, input.revision)

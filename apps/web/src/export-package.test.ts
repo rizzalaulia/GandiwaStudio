@@ -34,7 +34,76 @@ function validManifest(): ExportManifest {
   }
 }
 
+type Node = { files: Map<string, File>; dirs: Map<string, Node> }
+const node = (): Node => ({ files: new Map(), dirs: new Map() })
+const directory = (root: Node) => ({
+  getDirectoryHandle: async (name: string, options?: { create?: boolean }) => {
+    await Promise.resolve()
+    const child = root.dirs.get(name)
+    if (!child && !options?.create) throw new DOMException('missing', 'NotFoundError')
+    const result = child ?? node()
+    root.dirs.set(name, result)
+    return directory(result)
+  },
+  getFileHandle: async (name: string, options?: { create?: boolean }) => {
+    await Promise.resolve()
+    const file = root.files.get(name)
+    if (!file && !options?.create) throw new DOMException('missing', 'NotFoundError')
+    const result = file ?? new File([''], name)
+    root.files.set(name, result)
+    return { getFile: async () => { await Promise.resolve(); return result } }
+  },
+})
+
 describe('export package contract', () => {
+  it('rejects an externally changed manifest before reading export evidence', async () => {
+    const root = node()
+    root.files.set('gandiwa-project.json', new File(['changed'], 'gandiwa-project.json'))
+    const { resolveExportPackageCandidate } = await import('./export-package')
+    await expect(resolveExportPackageCandidate({
+      directory: directory(root) as never,
+      manifest: { schema_version: 1, project_id: assetId, project_name: 'Test', assets: [] },
+      manifestSnapshot: 'expected',
+      assetId,
+      revision: 2,
+    })).rejects.toThrow(/manifest changed externally/)
+    expect(root.dirs.size).toBe(0)
+  })
+
+  it('rejects a missing metadata sidecar without creating folders', async () => {
+    const root = node()
+    const manifestSnapshot = 'manifest'
+    root.files.set('gandiwa-project.json', new File([manifestSnapshot], 'gandiwa-project.json'))
+    const { resolveExportPackageCandidate } = await import('./export-package')
+    await expect(resolveExportPackageCandidate({
+      directory: directory(root) as never,
+      manifest: { schema_version: 1, project_id: assetId, project_name: 'Test', assets: [] },
+      manifestSnapshot,
+      assetId,
+      revision: 2,
+    })).rejects.toThrow(/asset revision is invalid/)
+    expect(root.dirs.size).toBe(0)
+  })
+
+  it('rejects a missing metadata sidecar after resolving the revision', async () => {
+    const root = node()
+    const manifestSnapshot = 'manifest'
+    root.files.set('gandiwa-project.json', new File([manifestSnapshot], 'gandiwa-project.json'))
+    const revisionNode = node()
+    const assetNode = node()
+    const revisionDirectory = node()
+    const bytes = new Uint8Array([0xff, 0xd8, 0xff, 0xd9])
+    revisionDirectory.files.set('master.jpeg', new File([bytes], 'master.jpeg'))
+    revisionDirectory.files.set('preparation.json', new File([JSON.stringify({ submission_checksum: '32461d5bd1773012acef0ba15636752949bd7c2ce50f9172159d9f56cf0dd9af' })], 'preparation.json'))
+    assetNode.dirs.set('2', revisionDirectory)
+    revisionNode.dirs.set(assetId, assetNode)
+    root.dirs.set('revisions', revisionNode)
+    const { resolveExportPackageCandidate } = await import('./export-package')
+    const manifest = { schema_version: 1 as const, project_id: assetId, project_name: 'Test', assets: [{ asset_id: assetId, content_type: 'photo' as const, creation_method: 'camera' as const, revisions: [{ revision: 2, generation_format: 'jpeg' as const, working_format: 'jpeg' as const, master_format: 'jpeg' as const, submission_format: 'jpeg' as const, relative_path: `revisions/${assetId}/2/master.jpeg` }] }] }
+    await expect(resolveExportPackageCandidate({ directory: directory(root) as never, manifest, manifestSnapshot, assetId, revision: 2 })).rejects.toThrow(/metadata|metadata directory/i)
+    expect(root.dirs.has('metadata')).toBe(false)
+  })
+
   it('builds a deterministic safe package name', () => {
     expect(buildExportPackageName(assetId, 2, '32461d5bd1773012acef0ba15636752949bd7c2ce50f9172159d9f56cf0dd9af'))
       .toBe('123e4567-e89b-12d3-a456-426614174000-r2-32461d5bd1773012')
