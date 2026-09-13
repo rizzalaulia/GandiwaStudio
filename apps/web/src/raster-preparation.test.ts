@@ -32,10 +32,10 @@ describe('prepareRasterForSubmission', () => {
     expect(result.manifest.assets[0]?.revisions.map((item) => item.master_format)).toEqual(['png', 'jpeg'])
     const asset = root.directories.get('revisions')!.directories.get('123e4567-e89b-12d3-a456-426614174000')!
     expect(new Uint8Array(await (await asset.directories.get('1')!.files.get('master.png')!.getFile()).arrayBuffer())).toEqual(PNG_HEADER)
-    const record = JSON.parse(asset.directories.get('2')!.files.get('preparation.json')!.content as string)
-    expect(record).toMatchObject({ source_revision: 1, revision: 2, quality: 0.92, megapixels: 4, alpha_handling: 'flatten-white', color_conversion: 'browser-canvas-to-srgb' })
-    expect(record.source_checksum).toMatch(/^[a-f0-9]{64}$/)
-    expect(record.submission_checksum).toMatch(/^[a-f0-9]{64}$/)
+    expect(asset.directories.get('2')!.files.get('preparation.json')!.content).toEqual(expect.any(String))
+    expect(result.preparation).toMatchObject({ source_revision: 1, revision: 2, quality: 0.92, megapixels: 4, alpha_handling: 'flatten-white', color_conversion: 'browser-canvas-to-srgb' })
+    expect(result.preparation.source_checksum).toMatch(/^[a-f0-9]{64}$/)
+    expect(result.preparation.submission_checksum).toMatch(/^[a-f0-9]{64}$/)
   })
 
   it('rejects output below 4MP before durable writes instead of upscaling', async () => {

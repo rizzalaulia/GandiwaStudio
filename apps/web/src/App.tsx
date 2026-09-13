@@ -87,6 +87,7 @@ import {
   detectExternalManifestChange,
   loadRememberedProject,
   openProject,
+  requestProjectWritePermission,
   reopenProjectFromUserGesture,
   type DirectoryHandleLike,
   type OpenProjectResult,
@@ -344,6 +345,10 @@ export function App() {
     setPreparingRaster(true)
     setPreparationMessage(null)
     try {
+      if (!(await requestProjectWritePermission(project.directory))) {
+        setPreparationMessage('Write permission was not granted. No revision was written.')
+        return
+      }
       const result = await prepareRasterForSubmission({
         manifest: project.manifest,
         manifestSnapshot: project.manifestSnapshot,
@@ -357,8 +362,16 @@ export function App() {
       activeProjectRef.current = next
       setActiveProject(next)
       setRasterReport(null)
-      setAuditReport(null)
-      setPreparationMessage(`JPEG submission revision ${result.manifest.assets.at(-1)?.revisions.at(-1)?.revision ?? 'new'} was saved locally. Previous audit evidence is stale; run preflight again.`)
+      setAuditReport((previous) => previous ? buildAuditCenter({
+        assetRevisionId: previous.asset.revisionId,
+        assetChecksum: previous.asset.checksum,
+        rulesetId: previous.ruleset.id,
+        rulesetVersion: previous.ruleset.version,
+        findings: previous.findings.map((finding) => ({ ruleId: finding.ruleId, verdict: finding.verdict, message: finding.message, evidence: finding.evidence })),
+        currentAssetRevisionId: `${result.assetId}-2`,
+        currentAssetChecksum: result.preparation.submission_checksum,
+      }) : null)
+      setPreparationMessage(`JPEG submission revision 2 was saved locally. Previous audit evidence is stale; run preflight again.`)
     } catch (cause) {
       setPreparationMessage(cause instanceof Error ? cause.message : 'Raster preparation could not be completed.')
     } finally {
