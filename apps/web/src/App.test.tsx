@@ -13,7 +13,7 @@ vi.mock('./project-handle-store', () => ({
   rememberProjectDirectory: handleStore.remember,
 }))
 
-import { App, isCurrentPreflight, isCurrentProjectPreflight, isSameApprovalEvidence } from './App'
+import { App, isCurrentExport, isCurrentPreflight, isCurrentProjectPreflight, isSameApprovalEvidence } from './App'
 
 describe('App shell', () => {
   it('rejects a preflight response that predates a metadata-save invalidation', () => {
@@ -26,6 +26,13 @@ describe('App shell', () => {
     const oldProject = {}
     const openedProject = {}
     expect(isCurrentProjectPreflight(7, 7, oldProject, openedProject)).toBe(false)
+  })
+
+  it('rejects a late export operation after active project lifecycle invalidates it', () => {
+    const oldProject = {}
+    const openedProject = {}
+    expect(isCurrentExport(4, 5, oldProject, oldProject)).toBe(false)
+    expect(isCurrentExport(5, 5, oldProject, openedProject)).toBe(false)
   })
 
   it('rejects durable audit write when preflight evidence differs from re-resolved current evidence', () => {
