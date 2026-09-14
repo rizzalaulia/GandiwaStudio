@@ -13,6 +13,7 @@ import { loadApproval, saveApproval, type LoadedApproval } from './approval-stor
 import { resolveApprovalSubmission, type ApprovalSubmission, type SubmissionDirectory } from './approval-submission'
 import { evaluateApprovalGate, type ApprovalGateResult, type DurableAuditSnapshot, type ApprovalRecord } from './approval-gate'
 import type { AuditDirectory } from './durable-audit-store'
+import { resolveExportPackageCandidate, writeExportPackage, type ExportPackageCandidate } from './export-package'
 
 const AUDIT_RULESET_ID = 'adobe-stock-2026-09-08-v1'
 const AUDIT_RULESET_VERSION = AUDIT_RULESET_ID
@@ -23,6 +24,10 @@ export function isCurrentPreflight(requestId: number, currentSequence: number): 
 
 export function isCurrentProjectPreflight(requestId: number, currentSequence: number, expectedProject: unknown, activeProject: unknown): boolean {
   return requestId === currentSequence && expectedProject === activeProject
+}
+
+export function isCurrentExport(operationId: number, currentSequence: number, expectedProject: unknown, activeProject: unknown): boolean {
+  return operationId === currentSequence && expectedProject === activeProject
 }
 
 export function isSameApprovalEvidence(left: Readonly<{ submissionChecksum: string; metadataChecksum: string }>, right: Readonly<{ submissionChecksum: string; metadataChecksum: string }>): boolean {
@@ -177,6 +182,19 @@ type CreateProjectForm = {
 }
 
 type ActiveProject = Extract<OpenProjectResult, { kind: 'opened' }>
+
+export function sameExportCandidate(left: ExportPackageCandidate, right: ExportPackageCandidate): boolean {
+  return left.assetId === right.assetId && left.revision === right.revision
+    && left.submissionChecksum === right.submissionChecksum
+    && left.metadataChecksum === right.metadataChecksum
+    && left.auditChecksum === right.auditChecksum
+    && left.approvalChecksum === right.approvalChecksum
+}
+
+function exportDirectory(project: ActiveProject): import('./export-package').ExportDirectory {
+  return project.directory as unknown as import('./export-package').ExportDirectory
+}
+
 type ExternalManifestDecision = Readonly<{ source: ActiveProject; external: ActiveProject }>
 
 function isSameActiveProject(left: ActiveProject | null, right: ActiveProject): boolean {
@@ -248,6 +266,8 @@ export function App() {
   const [approvalGate, setApprovalGate] = useState<ApprovalGateResult>({ status: 'NOT READY', adobeReady: false, exportGate: 'BLOCKED', reasons: ['No active asset revision exists.'] })
   const [approvalMessage, setApprovalMessage] = useState<string | null>(null)
   const [isApprovalBusy, setApprovalBusy] = useState(false)
+  const [isExporting, setExporting] = useState(false)
+  const [exportMessage, setExportMessage] = useState<string | null>(null)
   const [stockMetadata, setStockMetadata] = useState<StockMetadataDraft>(DEFAULT_STOCK_METADATA)
   const [loadedMetadata, setLoadedMetadata] = useState<LoadedStockMetadata | null>(null)
   const [metadataMessage, setMetadataMessage] = useState<string | null>(null)
@@ -257,6 +277,7 @@ export function App() {
   const preflightSequence = useRef(0)
   const approvalContextSequence = useRef(0)
   const approvalOperationSequence = useRef(0)
+  const exportOperationSequence = useRef(0)
   const createProjectOpenerRef = useRef<HTMLButtonElement>(null)
   const externalChangeCheckerRef = useRef<HTMLButtonElement>(null)
   const externalManifestReloadRef = useRef<HTMLButtonElement>(null)
@@ -502,11 +523,70 @@ export function App() {
     }
   }
 
+  const handleExport = async () => {
+    const project = activeProjectRef.current
+    const asset = project?.manifest.assets.at(-1)
+    const revision = asset?.revisions.at(-1)
+    if (!project || !asset || !revision || approvalGate.exportGate !== 'CLEAR') return
+    const operationId = ++exportOperationSequence.current
+    const isCurrent = () => isCurrentExport(operationId, exportOperationSequence.current, project, activeProjectRef.current)
+    setExporting(true)
+    setExportMessage(null)
+    try {
+      const candidate = await resolveExportPackageCandidate({
+        directory: exportDirectory(project),
+        manifest: project.manifest,
+        manifestSnapshot: project.manifestSnapshot,
+        assetId: asset.asset_id,
+        revision: revision.revision,
+      })
+      if (!isCurrent()) return
+      if (candidate.gate.exportGate !== 'CLEAR') throw new Error('Export is blocked by current approval evidence.')
+      const granted = await requestProjectWritePermission(project.directory)
+      if (!isCurrent()) return
+      if (!granted) throw new Error('Write permission was not granted. Export package was not written.')
+      const current = await resolveExportPackageCandidate({
+        directory: exportDirectory(project),
+        manifest: project.manifest,
+        manifestSnapshot: project.manifestSnapshot,
+        assetId: asset.asset_id,
+        revision: revision.revision,
+      })
+      if (!isCurrent()) return
+      if (!sameExportCandidate(candidate, current)) throw new Error('Approval evidence changed before export. Run audit and approval again.')
+      const result = await writeExportPackage({
+        directory: exportDirectory(project),
+        candidate: current,
+        verifyCurrentEvidence: async () => {
+          if (!isCurrent()) throw new Error('Export request was superseded. Completion marker was not written.')
+          const latest = await resolveExportPackageCandidate({
+            directory: exportDirectory(project),
+            manifest: project.manifest,
+            manifestSnapshot: project.manifestSnapshot,
+            assetId: asset.asset_id,
+            revision: revision.revision,
+          })
+          if (!isCurrent()) throw new Error('Export request was superseded. Completion marker was not written.')
+          if (!sameExportCandidate(current, latest)) throw new Error('Approval evidence changed during export. Completion marker was not written.')
+        },
+      })
+      if (!isCurrent()) return
+      setExportMessage(`Export package “${result.packageName}” written locally. Completion marker verified.`)
+    } catch (cause) {
+      if (isCurrent()) setExportMessage(cause instanceof Error ? cause.message : 'Export package could not be written.')
+    } finally {
+      if (isCurrent()) setExporting(false)
+    }
+  }
+
   const receiveOpenResult = (result: OpenProjectResult) => {
     if (result.kind === 'opened') {
       preflightSequence.current += 1
       approvalContextSequence.current += 1
       approvalOperationSequence.current += 1
+      exportOperationSequence.current += 1
+      setExporting(false)
+      setExportMessage(null)
       activeProjectRef.current = result
       setActiveProject(result)
       const latestAsset = result.manifest.assets.at(-1)
@@ -617,6 +697,9 @@ export function App() {
       // A preflight started before this save must not later resurrect a CLEAR
       // audit after metadata has made the submission state stale.
       ++preflightSequence.current
+      ++exportOperationSequence.current
+      setExporting(false)
+      setExportMessage(null)
       const invalidatedAudit = auditReport !== null
       setAuditReport((previous) => previous ? buildAuditCenter({
         assetRevisionId: previous.asset.revisionId,
@@ -679,6 +762,9 @@ export function App() {
         currentAssetChecksum: result.preparation.submission_checksum,
       }) : null)
       ++preflightSequence.current
+      ++exportOperationSequence.current
+      setExporting(false)
+      setExportMessage(null)
       void refreshApprovalContext(next, null)
       setPreparationMessage(`JPEG submission revision 2 was saved locally. Previous audit evidence is stale; run preflight again.`)
     } catch (cause) {
@@ -985,6 +1071,14 @@ export function App() {
             </section>
             {auditReport ? <AuditCenterPanel audit={auditReport} /> : null}
             {activeProject.manifest.assets.length > 0 ? <ApprovalGatePanel gate={approvalGate} asset={approvalSubmission ? { assetId: approvalSubmission.assetId, revision: approvalSubmission.revision } : null} audit={durableAudit} submission={approvalSubmission} metadataValid={Boolean(loadedMetadata)} metadataChecksum={approvalSubmission?.metadataChecksum ?? null} auditChecksum={durableAuditChecksum} busy={isApprovalBusy} message={approvalMessage} onAudit={() => void auditPreparedRevision()} onApprove={() => void approveCurrentRevision()} /> : null}
+            {activeProject.manifest.assets.length > 0 ? (
+              <section className="audit-center" aria-label="Portable export package">
+                <p className="eyebrow">PORTABLE EXPORT PACKAGE</p>
+                <p className="helper">Browser-local only. Gandiwa revalidates the latest approved evidence before writing.</p>
+                <button className="button button-primary" disabled={isExporting || isApprovalBusy || approvalGate.exportGate !== 'CLEAR'} onClick={() => void handleExport()}>{isExporting ? 'Writing export package…' : 'Export approved package'}</button>
+                {exportMessage ? <p className="project-result" role="status">{exportMessage}</p> : null}
+              </section>
+            ) : null}
             <div className="dialog-actions">
               <button ref={externalChangeCheckerRef} className="button button-secondary" onClick={() => void checkExternalManifestChange()}>Check for external changes</button>
               <button
@@ -993,7 +1087,10 @@ export function App() {
                   activeProjectRef.current = null
                   approvalContextSequence.current += 1
                   approvalOperationSequence.current += 1
+                  exportOperationSequence.current += 1
                   preflightSequence.current += 1
+                  setExporting(false)
+                  setExportMessage(null)
                   setExternalManifestDecision(null)
                   setActiveProject(null)
                   setRasterReport(null)
@@ -1053,7 +1150,10 @@ export function App() {
                   activeProjectRef.current = externalManifestDecision.external
                   approvalContextSequence.current += 1
                   approvalOperationSequence.current += 1
+                  exportOperationSequence.current += 1
                   preflightSequence.current += 1
+                  setExporting(false)
+                  setExportMessage(null)
                   setActiveProject(externalManifestDecision.external)
                   setApprovalSubmission(null)
                   setDurableAudit(null)
