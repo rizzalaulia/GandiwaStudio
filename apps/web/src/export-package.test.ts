@@ -149,8 +149,11 @@ describe('export package writer', () => {
     const packageNode = root.dirs.get('exports')?.dirs.get(result.packageName)
     expect(packageNode?.files.has('final.jpeg')).toBe(true)
     expect(packageNode?.files.has('export-manifest.json')).toBe(true)
-    expect(events.at(-2)).toBe('write:export-manifest.json')
-    expect(events.at(-1)).toBe('close:export-manifest.json')
+    const markerWrite = events.lastIndexOf('write:export-manifest.json')
+    expect(markerWrite).toBeGreaterThan(-1)
+    const filesystemEvents = events.filter((event) => event !== 'verify')
+    expect(filesystemEvents.at(-1)).toBe('close:export-manifest.json')
+    expect(events.slice(markerWrite + 1)).not.toContain('write:final.jpeg')
   })
 
   it('writes final.svg for a vector candidate', async () => {
@@ -173,6 +176,48 @@ describe('export package writer', () => {
     const root = writeNode(); const exports = writeNode(); root.dirs.set('exports', exports)
     exports.dirs.set(candidate('jpeg').packageName, writeNode())
     await expect(writeExportPackage({ directory: writableDirectory(root) as never, candidate: candidate('jpeg'), verifyCurrentEvidence: async () => undefined })).rejects.toThrow(/already exists|overwrite/)
+  })
+
+  it('refuses a completion marker that appears before publication', async () => {
+    const root = writeNode(); const exports = writeNode(); root.dirs.set('exports', exports)
+    let verificationCount = 0
+    await expect(writeExportPackage({
+      directory: writableDirectory(root) as never,
+      candidate: candidate('jpeg'),
+      verifyCurrentEvidence: async () => {
+        verificationCount += 1
+        if (verificationCount === 3) exports.dirs.get(candidate('jpeg').packageName)?.files.set('export-manifest.json', { content: 'intruder' })
+      },
+    })).rejects.toThrow(/export-manifest|overwrite/)
+    expect(exports.dirs.get(candidate('jpeg').packageName)?.files.get('export-manifest.json')?.content).toBe('intruder')
+  })
+
+  it('does not publish a valid marker when evidence is invalidated after marker handle creation', async () => {
+    const root = writeNode(); root.dirs.set('exports', writeNode())
+    let verificationCount = 0
+    await expect(writeExportPackage({
+      directory: writableDirectory(root) as never,
+      candidate: candidate('jpeg'),
+      verifyCurrentEvidence: async () => {
+        verificationCount += 1
+        if (verificationCount === 5) throw new Error('export superseded')
+      },
+    })).rejects.toThrow('export superseded')
+    const marker = root.dirs.get('exports')?.dirs.get(candidate('jpeg').packageName)?.files.get('export-manifest.json')
+    expect(marker?.content).toBe('')
+  })
+
+  it('does not return export success when evidence is invalidated after marker close', async () => {
+    const root = writeNode(); root.dirs.set('exports', writeNode())
+    let verificationCount = 0
+    await expect(writeExportPackage({
+      directory: writableDirectory(root) as never,
+      candidate: candidate('jpeg'),
+      verifyCurrentEvidence: async () => {
+        verificationCount += 1
+        if (verificationCount === 8) throw new Error('export superseded after close')
+      },
+    })).rejects.toThrow('export superseded after close')
   })
 
   it('does not write a completion marker when final verification fails', async () => {

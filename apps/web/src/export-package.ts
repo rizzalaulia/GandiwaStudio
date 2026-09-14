@@ -258,8 +258,16 @@ export async function writeExportPackage(input: Readonly<{
   await input.verifyCurrentEvidence()
   const exportManifest = buildExportManifest({ assetId: input.candidate.assetId, revision: input.candidate.revision, submissionFormat: input.candidate.submissionFormat, rulesetId: RULESET, rulesetVersion: RULESET, submissionChecksum: input.candidate.submissionChecksum, metadataChecksum: input.candidate.metadataChecksum, auditChecksum: input.candidate.auditChecksum, approvalChecksum: input.candidate.approvalChecksum, files: entries })
   const exportManifestSnapshot = `${JSON.stringify(exportManifest, null, 2)}\n`
-  const marker = await (await packageDirectory.getFileHandle('export-manifest.json', { create: true })).createWritable()
-  await marker.write(exportManifestSnapshot); await marker.close()
+  try { await packageDirectory.getFileHandle('export-manifest.json', { create: false }); throw new Error('refusing to overwrite export-manifest.json') } catch (cause) { if (!(cause instanceof DOMException && cause.name === 'NotFoundError')) throw cause }
+  await input.verifyCurrentEvidence()
+  const markerHandle = await packageDirectory.getFileHandle('export-manifest.json', { create: true })
+  await input.verifyCurrentEvidence()
+  const marker = await markerHandle.createWritable()
+  await input.verifyCurrentEvidence()
+  await marker.write(exportManifestSnapshot)
+  await input.verifyCurrentEvidence()
+  await marker.close()
+  await input.verifyCurrentEvidence()
   return { packageName: input.candidate.packageName, exportManifest, exportManifestSnapshot }
 }
 
