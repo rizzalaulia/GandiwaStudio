@@ -15,7 +15,7 @@ export type GuidedWorkflowShellProps = Readonly<{
   showSidebar?: boolean
   assetSummary: string
   presentation: GuidedWorkflowPresentation
-  onOpenInspector: () => void
+  onOpenInspector: (intent?: 'project-files' | 'audit-history' | 'inspector') => void
   task: ReactNode
   inspector: ReactNode
 }>
@@ -50,9 +50,9 @@ export function GuidedWorkflowShell({
     setIsInspectorOpen(false)
     inspectorTriggerRef.current?.focus()
   }
-  const openInspector = () => {
+  const openInspector = (intent: 'project-files' | 'audit-history' | 'inspector' = 'inspector') => {
     if (usesInspectorDrawer) setIsInspectorOpen(true)
-    onOpenInspector()
+    onOpenInspector(intent)
   }
 
   return (
@@ -68,6 +68,8 @@ export function GuidedWorkflowShell({
           <nav aria-label="Project navigation" className="guided-project-nav">
             <span className="guided-nav-heading">PROJECT</span>
             <a className="guided-nav-item guided-nav-item-current" href="#workflow">Workspace</a>
+            <button className="guided-nav-item" type="button" aria-controls="workflow-inspector" onClick={() => openInspector('project-files')}>Project files</button>
+            <button className="guided-nav-item" type="button" aria-controls="workflow-inspector" onClick={() => openInspector('audit-history')}>Audit history</button>
           </nav>
         </div>
         <p className="guided-sidebar-note">Browser-owned local project folder.<br />Evidence stays revision-bound.</p>
@@ -114,7 +116,7 @@ export function GuidedWorkflowShell({
               <p className="guided-kicker">CURRENT TASK</p>
               <h2>{presentation.title}</h2>
             </div>
-            <button ref={inspectorTriggerRef} className="guided-inspector-trigger" type="button" aria-label="Open contextual inspector" aria-controls="workflow-inspector" onClick={openInspector}>
+            <button ref={inspectorTriggerRef} className="guided-inspector-trigger" type="button" aria-label="Open contextual inspector" aria-controls="workflow-inspector" onClick={() => openInspector('inspector')}>
               Inspect details
             </button>
           </div>

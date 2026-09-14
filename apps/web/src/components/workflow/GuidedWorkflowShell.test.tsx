@@ -31,12 +31,13 @@ describe('GuidedWorkflowShell', () => {
   afterEach(() => cleanup())
 
   it('renders the project regions and one primary task action', () => {
+    const onOpenInspector = vi.fn()
     render(
       <GuidedWorkflowShell
         projectName="Botanical Forms"
         assetSummary="Illustration · revision r002"
         presentation={presentation}
-        onOpenInspector={() => undefined}
+        onOpenInspector={onOpenInspector}
         task={<button data-testid="primary-workflow-action">Complete metadata</button>}
         inspector={<p>Metadata is incomplete.</p>}
       />,
@@ -44,8 +45,14 @@ describe('GuidedWorkflowShell', () => {
 
     expect(screen.getByRole('navigation', { name: 'Project navigation' })).toBeVisible()
     expect(screen.getByRole('link', { name: 'Workspace' })).toHaveAttribute('href', '#workflow')
-    expect(screen.queryByRole('link', { name: 'Project files' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: 'Audit history' })).not.toBeInTheDocument()
+    const projectFiles = screen.getByRole('button', { name: 'Project files' })
+    const auditHistory = screen.getByRole('button', { name: 'Audit history' })
+    expect(projectFiles).toHaveAttribute('aria-controls', 'workflow-inspector')
+    expect(auditHistory).toHaveAttribute('aria-controls', 'workflow-inspector')
+    fireEvent.click(projectFiles)
+    fireEvent.click(auditHistory)
+    expect(onOpenInspector).toHaveBeenNthCalledWith(1, 'project-files')
+    expect(onOpenInspector).toHaveBeenNthCalledWith(2, 'audit-history')
     expect(screen.getByRole('banner', { name: 'Project header' })).toHaveTextContent('Botanical Forms')
     expect(screen.getByRole('navigation', { name: 'Production workflow' })).toHaveTextContent('Complete metadata')
     expect(screen.getByRole('region', { name: 'Current workflow task' })).toHaveTextContent('Complete the submission metadata')

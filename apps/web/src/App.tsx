@@ -276,6 +276,7 @@ export function App() {
   const [loadedMetadata, setLoadedMetadata] = useState<LoadedStockMetadata | null>(null)
   const [metadataMessage, setMetadataMessage] = useState<string | null>(null)
   const [isSavingMetadata, setSavingMetadata] = useState(false)
+  const [inspectorView, setInspectorView] = useState<'inspector' | 'project-files' | 'audit-history'>('inspector')
   const activeProjectRef = useRef<ActiveProject | null>(null)
   const requestSequence = useRef(0)
   const preflightSequence = useRef(0)
@@ -973,7 +974,25 @@ export function App() {
           : workflowPresentation.activeStep === 'export'
             ? exportTask
             : <p className="helper">Open or create a local project to begin.</p>
-  const workflowInspector = (
+  const workflowInspector = inspectorView === 'project-files' ? (
+    <>
+      <p className="guided-kicker">PROJECT FILES</p>
+      <h3>Current browser-local project context</h3>
+      <ul className="guided-inspector-list">
+        <li>Manifest v{activeProject?.manifest.schema_version} · {activeProject?.manifest.assets.length ?? 0} asset(s)</li>
+        <li>{activeAsset ? `Asset ${activeAsset.asset_id} · ${activeAsset.content_type} · ${activeAsset.creation_method}` : 'No durable asset has been prepared yet.'}</li>
+        <li>{activeRevision ? `Current revision ${activeRevision.revision}` : 'No current durable revision exists.'}</li>
+      </ul>
+      <p className="helper">This is a browser-owned project folder. Gandiwa does not upload or write your source files through the backend.</p>
+    </>
+  ) : inspectorView === 'audit-history' ? (
+    <>
+      <p className="guided-kicker">AUDIT HISTORY</p>
+      <h3>Current durable audit evidence</h3>
+      {auditReport ? <AuditCenterPanel audit={auditReport} /> : durableAudit ? <ul className="guided-inspector-list"><li>Asset <code>{durableAudit.assetId}</code> · revision {durableAudit.revision}</li><li>Ruleset {durableAudit.rulesetId} / {durableAudit.rulesetVersion}</li><li>Created {durableAudit.createdAt}</li><li>{durableAudit.findings.length} finding(s) bound to this evidence snapshot</li></ul> : <p className="helper">No durable audit evidence exists for the current revision yet. Run the audit after metadata is current.</p>}
+      <p className="helper">Only evidence bound to the current revision, metadata, checksum, and ruleset can clear the next gate.</p>
+    </>
+  ) : (
     <>
       <p>{workflowPresentation.explanation}</p>
       {workflowPresentation.blockers.length > 0 ? <ul className="guided-inspector-list">{workflowPresentation.blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}</ul> : null}
@@ -1080,7 +1099,10 @@ export function App() {
               projectName={activeProject.manifest.project_name}
               assetSummary={activeAsset && activeRevision ? `${activeAsset.content_type} · revision ${activeRevision.revision}` : 'No asset yet'}
               presentation={workflowPresentation}
-              onOpenInspector={() => document.getElementById('workflow-inspector')?.scrollIntoView({ block: 'nearest' })}
+              onOpenInspector={(intent = 'inspector') => {
+                setInspectorView(intent)
+                document.getElementById('workflow-inspector')?.scrollIntoView({ block: 'nearest' })
+              }}
               task={workflowTask}
               inspector={workflowInspector}
             />
