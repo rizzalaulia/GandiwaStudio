@@ -60,6 +60,31 @@ describe('GuidedWorkflowShell', () => {
     expect(screen.getByRole('complementary', { name: 'Contextual inspector' })).toHaveTextContent('Metadata is incomplete.')
   })
 
+  it('renders a breadcrumb and sidebar status without a second project header', () => {
+    render(
+      <GuidedWorkflowShell
+        projectName="Botanical Forms"
+        assetSummary="Illustration · revision r002"
+        breadcrumb={['Projects', 'Botanical Forms', 'asset-01', 'revision r002']}
+        statusItems={[
+          { label: 'Backend available', tone: 'ok' },
+          { label: 'Folder permission granted', tone: 'ok' },
+        ]}
+        presentation={presentation}
+        onOpenInspector={() => undefined}
+        task={<button data-testid="primary-workflow-action">Complete metadata</button>}
+        inspector={<p>Details</p>}
+      />,
+    )
+
+    const breadcrumb = screen.getByRole('navigation', { name: 'Breadcrumb' })
+    expect(breadcrumb).toHaveTextContent('Projects / Botanical Forms / asset-01 / revision r002')
+
+    const status = screen.getByRole('list', { name: 'Project status' })
+    expect(status).toHaveTextContent('Backend available')
+    expect(status).toHaveTextContent('Folder permission granted')
+  })
+
   it('marks the current workflow step and exposes inspector as a keyboard button', () => {
     render(
       <GuidedWorkflowShell
@@ -117,11 +142,37 @@ describe('GuidedWorkflowShell', () => {
     const drawer = screen.getByRole('dialog', { name: 'Contextual inspector' })
     expect(onOpenInspector).toHaveBeenCalledOnce()
     expect(drawer).toBeVisible()
-    expect(screen.getByRole('button', { name: 'Close details' })).toHaveFocus()
+    expect(document.querySelector('.guided-sidebar')).toHaveAttribute('aria-hidden', 'true')
+    expect(document.querySelector('.guided-workspace')).toHaveAttribute('aria-hidden', 'true')
+    const close = screen.getByRole('button', { name: 'Close details' })
+    expect(close).toHaveFocus()
+
+    fireEvent.keyDown(close, { key: 'Tab' })
+    expect(close).toHaveFocus()
 
     fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Escape' })
 
     expect(screen.queryByRole('dialog', { name: 'Contextual inspector' })).not.toBeInTheDocument()
     expect(trigger).toHaveFocus()
+  })
+
+  it('returns focus to the sidebar control that opened the tablet inspector drawer', () => {
+    setViewport(1150)
+    render(
+      <GuidedWorkflowShell
+        projectName="Botanical Forms"
+        assetSummary="Illustration · revision r002"
+        presentation={presentation}
+        onOpenInspector={() => undefined}
+        task={<button data-testid="primary-workflow-action">Complete metadata</button>}
+        inspector={<p>Details</p>}
+      />,
+    )
+
+    const projectFiles = screen.getByRole('button', { name: 'Project files' })
+    fireEvent.click(projectFiles)
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Close details' }), { key: 'Escape' })
+
+    expect(projectFiles).toHaveFocus()
   })
 })

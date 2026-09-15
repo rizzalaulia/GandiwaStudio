@@ -287,6 +287,10 @@ export function App() {
   const externalChangeCheckerRef = useRef<HTMLButtonElement>(null)
   const externalManifestReloadRef = useRef<HTMLButtonElement>(null)
 
+  useEffect(() => {
+    if (externalManifestDecision) externalManifestReloadRef.current?.focus()
+  }, [externalManifestDecision])
+
   const refresh = useCallback(async () => {
     const requestId = ++requestSequence.current
     setLoading(true)
@@ -314,10 +318,6 @@ export function App() {
       requestSequence.current += 1
     }
   }, [refresh])
-
-  useEffect(() => {
-    if (externalManifestDecision) externalManifestReloadRef.current?.focus()
-  }, [externalManifestDecision])
 
   useEffect(() => {
     setRasterReport(null)
@@ -926,6 +926,7 @@ export function App() {
       <p className="guided-kicker">STOCK METADATA & AI DISCLOSURE</p>
       <p className="helper">Saved as a browser-local sidecar. Asset content type and creation method remain immutable provenance.</p>
       <p className="guided-provenance">Asset <code>{activeAsset.asset_id}</code> · provenance: {activeAsset.content_type} · {activeAsset.creation_method}</p>
+      <button className="button button-primary guided-primary-action" disabled={isSavingMetadata || !assessStockMetadata(stockMetadata, { contentType: activeAsset.content_type, creationMethod: activeAsset.creation_method }).valid} onClick={() => void saveMetadata()}>{isSavingMetadata ? 'Saving metadata…' : 'Save metadata locally'}</button>
       <label htmlFor="stock-content-type">Submission content type</label>
       <select id="stock-content-type" value={stockMetadata.contentType} disabled={isSavingMetadata} onChange={(event) => setStockMetadata({ ...stockMetadata, contentType: event.target.value as StockMetadataDraft['contentType'] })}>
         <option value="photo">Photo</option><option value="illustration">Illustration</option><option value="vector">Vector</option>
@@ -948,7 +949,6 @@ export function App() {
         <option value="not_required">Not required</option><option value="attached">Attached</option><option value="needs_review">Needs review</option>
       </select>
       {assessStockMetadata(stockMetadata, { contentType: activeAsset.content_type, creationMethod: activeAsset.creation_method }).warnings.map((warning) => <p className="helper" key={warning}>Warning: {warning}</p>)}
-      <button className="button button-primary" disabled={isSavingMetadata || !assessStockMetadata(stockMetadata, { contentType: activeAsset.content_type, creationMethod: activeAsset.creation_method }).valid} onClick={() => void saveMetadata()}>{isSavingMetadata ? 'Saving metadata…' : 'Save metadata locally'}</button>
       {metadataMessage ? <p className="project-result" role="status">{metadataMessage}</p> : null}
     </section>
   ) : <p className="helper">Prepare an asset revision before editing stock metadata.</p>
@@ -1021,7 +1021,8 @@ export function App() {
   )
 
   return (
-    <main className="app-shell">
+    <main className={activeProject ? 'app-shell app-shell-guided' : 'app-shell'}>
+      {activeProject ? null : (
       <aside className="nav-panel">
         <div>
           <p className="eyebrow">GANDIWA STUDIO</p>
@@ -1033,8 +1034,10 @@ export function App() {
           <span>{statusLabel}</span>
         </div>
       </aside>
+      )}
 
-      <section className="workspace" aria-busy={loading}>
+      <section className={activeProject ? 'workspace workspace-guided' : 'workspace'} aria-busy={loading}>
+        {activeProject ? null : (
         <header className="workspace-header">
           <div>
             <p className="eyebrow">PROJECT WORKSPACE</p>
@@ -1044,8 +1047,9 @@ export function App() {
             MVP {runtime?.mvp_version ?? '…'}
           </div>
         </header>
+        )}
 
-        {error ? (
+        {activeProject ? null : error ? (
           <div className="status-card status-fail" role="alert">
             <div>
               <strong>Backend unavailable</strong>
@@ -1065,6 +1069,8 @@ export function App() {
 
         {creationMessage ? <p className="project-result" role="status">{creationMessage}</p> : null}
 
+        {activeProject ? null : (
+        <>
         <div className="action-grid" aria-describedby="project-actions-help">
           <button ref={createProjectOpenerRef} className="action-card action-primary" aria-label="Create Project" onClick={openCreateDialog}>
             <span className="action-icon" aria-hidden="true">＋</span>
@@ -1092,12 +1098,19 @@ export function App() {
         <p className="helper" id="project-actions-help">
           Create Project and Open Project use a Chrome or Edge folder picker. Reopen uses browser-local handle storage only; it does not sync project files.
         </p>
+        </>
+        )}
 
         {activeProject ? (
           <section className="guided-project-region" aria-label="Active project">
             <GuidedWorkflowShell
               projectName={activeProject.manifest.project_name}
               assetSummary={activeAsset && activeRevision ? `${activeAsset.content_type} · revision ${activeRevision.revision}` : 'No asset yet'}
+              breadcrumb={['Projects', activeProject.manifest.project_name, activeAsset ? activeAsset.asset_id : 'no asset', activeRevision ? `revision ${activeRevision.revision}` : 'no revision']}
+              statusItems={[
+                { label: backendLabel, tone: isBackendHealthy ? 'ok' : 'warn' },
+                { label: statusLabel, tone: runtime?.worker.status === 'running' ? 'ok' : 'idle' },
+              ]}
               presentation={workflowPresentation}
               onOpenInspector={(intent = 'inspector') => {
                 setInspectorView(intent)
@@ -1107,6 +1120,8 @@ export function App() {
               inspector={workflowInspector}
             />
             <div className="dialog-actions guided-project-actions">
+              <button className="button button-secondary" aria-label="Open Project" disabled={isOpening} onClick={() => void handleOpenProject()}>Open another project</button>
+              <button className="button button-secondary" aria-label="Reopen remembered project" disabled={isOpening || !rememberedDirectory} onClick={handleReopenProject}>Reopen remembered project</button>
               <button ref={externalChangeCheckerRef} className="button button-secondary" onClick={() => void checkExternalManifestChange()}>Check for external changes</button>
               <button
                 className="button button-secondary"
@@ -1140,6 +1155,7 @@ export function App() {
           </section>
         ) : null}
 
+        {activeProject ? null : (
         <section className="runtime-grid" aria-label="Runtime status">
           <article className="panel">
             <p className="eyebrow">BACKEND HEALTH</p>
@@ -1152,6 +1168,7 @@ export function App() {
             <span>{runtime?.worker.heartbeat_at ? `Heartbeat ${new Date(runtime.worker.heartbeat_at).toLocaleTimeString()}` : 'No heartbeat available.'}</span>
           </article>
         </section>
+        )}
       </section>
 
       {externalManifestDecision ? (

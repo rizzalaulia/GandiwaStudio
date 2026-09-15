@@ -73,6 +73,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 
 /* Issue #56 Canonical Hybrid guided workflow shell. */
 .guided-shell { min-height: 100vh; display: grid; grid-template-columns: 252px minmax(0, 1fr) 340px; color: var(--text); background: var(--canvas); }
+.app-shell-guided { display: block; background: var(--canvas); }
+.workspace-guided { width: 100%; max-width: none; margin: 0; padding: 0; }
 .guided-sidebar { display: flex; flex-direction: column; justify-content: space-between; padding: 24px 16px; color: #e9eef7; background: var(--navy); }
 .guided-brand, .guided-label, .guided-nav-heading, .guided-kicker { margin: 0; font-size: .68rem; font-weight: 800; letter-spacing: .11em; }
 .guided-brand { padding: 0 10px 20px; color: #fff; }
@@ -82,11 +84,17 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .guided-project-context span:last-child, .guided-sidebar-note { color: #b7c2d1; font-size: .78rem; line-height: 1.5; }
 .guided-project-nav { display: grid; gap: 3px; }
 .guided-nav-heading { padding: 0 10px 7px; }
+.guided-breadcrumb { color: var(--subtle); font-size: .76rem; padding-bottom: 8px; }
+.guided-status { display: grid; gap: 7px; margin: 16px 0 0; padding: 14px 10px 0; border-top: 1px solid #36485e; list-style: none; color: #b7c2d1; font-size: .76rem; }
+.guided-status li { display: flex; gap: 8px; align-items: center; }
+.guided-led { width: 7px; height: 7px; flex: none; border-radius: 50%; background: #4ade80; }
+.guided-led-idle { background: #94a3b8; }
 .guided-nav-item { padding: 9px 10px; color: #bdc8d7; text-decoration: none; border-radius: 6px; }
 .guided-nav-item:hover, .guided-nav-item-current { color: #fff; background: #314259; }
 .guided-nav-item-current { box-shadow: inset 2px 0 #e3b17e; }
 .guided-sidebar-note { margin: 0 10px; }
-.guided-workspace { min-width: 0; padding: 34px clamp(24px, 4vw, 60px) 60px; }
+.guided-workspace { min-width: 0; padding: 0; }
+.guided-topbar { position: sticky; top: 0; z-index: 4; padding: 26px clamp(24px, 4vw, 60px) 0; background: color-mix(in srgb, var(--canvas) 94%, transparent); backdrop-filter: blur(10px); }
 .guided-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding-bottom: 22px; border-bottom: 1px solid var(--line); }
 .guided-kicker { color: var(--subtle); }
 .guided-header h1, .guided-task h2, .guided-inspector h2 { margin: 8px 0 0; letter-spacing: -.03em; line-height: 1.15; }
@@ -107,7 +115,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .guided-step-current strong { color: var(--text); }
 .guided-step-complete .guided-step-marker { border-color: var(--success); color: var(--success); }
 .guided-step-complete strong { color: var(--success); }
-.guided-task { border: 1px solid var(--line); background: var(--surface); box-shadow: 0 8px 24px rgb(24 33 47 / .08); }
+.guided-task { border: 1px solid var(--line); background: var(--surface); box-shadow: 0 8px 24px rgb(24 33 47 / .08); margin: 0 clamp(24px, 4vw, 60px) 56px; }
 .guided-task-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 26px 28px 0; }
 .guided-task h2 { font-size: 1.35rem; }
 .guided-inspector-trigger { border: 0; padding: 4px 0; color: var(--accent-hover); background: transparent; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; font-weight: 700; }
@@ -116,7 +124,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .guided-blockers strong { font-size: .82rem; }
 .guided-blockers ul { margin: 6px 0 0; padding-left: 18px; }
 .guided-task-outlet { padding: 24px 28px 28px; }
-.guided-task-outlet > button[data-testid="primary-workflow-action"] { border: 1px solid var(--accent); padding: 11px 15px; background: var(--accent); color: #fff; cursor: pointer; font-weight: 700; }
+.guided-task-outlet > button[data-testid="primary-workflow-action"], .guided-primary-action { border: 1px solid var(--accent); padding: 11px 15px; background: var(--accent); color: #fff; cursor: pointer; font-weight: 700; }
+.guided-primary-action { margin: 0 0 20px; }
+.guided-primary-action:disabled { cursor: not-allowed; opacity: .55; }
 .guided-inspector { min-width: 0; padding: 34px 24px; border-left: 1px solid var(--line); background: var(--surface); }
 .guided-inspector h2, .guided-inspector-drawer h2 { font-size: 1.15rem; }
 .guided-inspector > p:not(.guided-kicker), .guided-inspector-drawer > p:not(.guided-kicker) { color: var(--muted); line-height: 1.6; }
@@ -148,6 +158,36 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .audit-findings li small { font-size: .76rem; }
 .audit-clear { color: var(--success); }
 .audit-stale { border-left: 3px solid var(--danger); color: var(--danger); padding-left: 10px; line-height: 1.45; }
+/* Opening feedback must remain announced without pushing the guided runway below the fold. */
+.workspace-guided > .project-result {
+  position: fixed;
+  z-index: 30;
+  top: 16px;
+  left: 50%;
+  width: min(620px, calc(100vw - 40px));
+  margin: 0;
+  transform: translateX(-50%);
+  box-shadow: 0 10px 28px rgb(24 33 47 / .16);
+}
+
+/* Keep the current action in the laptop viewport used by the acceptance gate. */
+@media (min-width: 1280px) and (max-height: 800px) {
+  .guided-topbar { padding-top: 16px; }
+  .guided-header { gap: 12px; padding-bottom: 14px; }
+  .guided-breadcrumb { padding-bottom: 5px; }
+  .guided-header h1 { margin-top: 5px; font-size: 1.6rem; }
+  .guided-header-summary { margin-top: 5px; }
+  .guided-stepper { padding: 14px 0; }
+  .guided-step { gap: 5px; }
+  .guided-step strong { font-size: .72rem; }
+  .guided-step small { margin-top: 1px; font-size: .66rem; }
+  .guided-task-heading { padding-top: 20px; }
+  .guided-explanation { margin-top: 10px; }
+  .guided-task-outlet { padding-top: 0; }
+  .guided-task-outlet .guided-provenance { margin: 8px 0; }
+}
+
+
 @media (max-width: 1279px) {
   .guided-shell { grid-template-columns: 220px minmax(0, 1fr); }
   .guided-inspector { display: none; }
@@ -162,8 +202,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   .dialog-actions .button { width: 100%; }
   .guided-shell { display: block; }
   .guided-sidebar { min-height: auto; }
-  .guided-workspace { padding: 26px 20px 40px; }
+  .guided-topbar { padding: 20px 20px 0; position: static; }
   .guided-header, .guided-task-heading { display: block; }
+  .guided-task { margin: 0 20px 40px; }
   .guided-state { display: inline-block; margin-top: 16px; }
   .guided-stepper ol { gap: 4px; }
   .guided-step:not(:last-child)::after { display: none; }

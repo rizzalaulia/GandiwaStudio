@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 
 import type { GuidedWorkflowPresentation, GuidedWorkflowStep } from '../../workflow/guided-workflow'
 
@@ -14,6 +14,8 @@ export type GuidedWorkflowShellProps = Readonly<{
   projectName: string
   showSidebar?: boolean
   assetSummary: string
+  breadcrumb?: readonly string[]
+  statusItems?: readonly { label: string; tone?: 'ok' | 'idle' | 'warn' }[]
   presentation: GuidedWorkflowPresentation
   onOpenInspector: (intent?: 'project-files' | 'audit-history' | 'inspector') => void
   task: ReactNode
@@ -23,6 +25,8 @@ export type GuidedWorkflowShellProps = Readonly<{
 export function GuidedWorkflowShell({
   projectName,
   assetSummary,
+  breadcrumb,
+  statusItems,
   presentation,
   onOpenInspector,
   task,
@@ -31,6 +35,8 @@ export function GuidedWorkflowShell({
   const [isInspectorOpen, setIsInspectorOpen] = useState(false)
   const [usesInspectorDrawer, setUsesInspectorDrawer] = useState(() => window.matchMedia?.('(max-width: 1279px)').matches ?? false)
   const inspectorTriggerRef = useRef<HTMLButtonElement>(null)
+  const lastInspectorOpenerRef = useRef<HTMLElement>(null)
+  const shouldRestoreInspectorFocusRef = useRef(false)
   const closeInspectorRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
@@ -43,21 +49,37 @@ export function GuidedWorkflowShell({
   }, [])
 
   useEffect(() => {
-    if (isInspectorOpen && usesInspectorDrawer) closeInspectorRef.current?.focus()
+    if (!isInspectorOpen || !usesInspectorDrawer) return
+    closeInspectorRef.current?.focus()
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = previousOverflow }
   }, [isInspectorOpen, usesInspectorDrawer])
 
+  const isDrawerModalOpen = isInspectorOpen && usesInspectorDrawer
+  const backgroundModalProps = isDrawerModalOpen ? { 'aria-hidden': true, inert: true } : {} as const
+
+  useLayoutEffect(() => {
+    if (!shouldRestoreInspectorFocusRef.current || isDrawerModalOpen) return
+    shouldRestoreInspectorFocusRef.current = false
+    lastInspectorOpenerRef.current?.focus()
+  }, [isDrawerModalOpen])
+
   const closeInspector = () => {
+    shouldRestoreInspectorFocusRef.current = true
     setIsInspectorOpen(false)
-    inspectorTriggerRef.current?.focus()
   }
-  const openInspector = (intent: 'project-files' | 'audit-history' | 'inspector' = 'inspector') => {
-    if (usesInspectorDrawer) setIsInspectorOpen(true)
+  const openInspector = (intent: 'project-files' | 'audit-history' | 'inspector' = 'inspector', opener?: HTMLElement) => {
+    if (usesInspectorDrawer) {
+      lastInspectorOpenerRef.current = opener ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null)
+      setIsInspectorOpen(true)
+    }
     onOpenInspector(intent)
   }
 
   return (
     <div className="guided-shell">
-      <aside className="guided-sidebar">
+      <aside className="guided-sidebar" {...backgroundModalProps}>
         <div>
           <p className="guided-brand">GANDIWA STUDIO</p>
           <div className="guided-project-context">
@@ -68,15 +90,28 @@ export function GuidedWorkflowShell({
           <nav aria-label="Project navigation" className="guided-project-nav">
             <span className="guided-nav-heading">PROJECT</span>
             <a className="guided-nav-item guided-nav-item-current" href="#workflow">Workspace</a>
-            <button className="guided-nav-item" type="button" aria-controls="workflow-inspector" onClick={() => openInspector('project-files')}>Project files</button>
-            <button className="guided-nav-item" type="button" aria-controls="workflow-inspector" onClick={() => openInspector('audit-history')}>Audit history</button>
+            <button className="guided-nav-item" type="button" aria-controls="workflow-inspector" onClick={(event) => openInspector('project-files', event.currentTarget)}>Project files</button>
+            <button className="guided-nav-item" type="button" aria-controls="workflow-inspector" onClick={(event) => openInspector('audit-history', event.currentTarget)}>Audit history</button>
           </nav>
         </div>
         <p className="guided-sidebar-note">Browser-owned local project folder.<br />Evidence stays revision-bound.</p>
+        {statusItems && statusItems.length > 0 ? (
+          <ul className="guided-status" aria-label="Project status">
+            {statusItems.map((item) => (
+              <li key={item.label}><span className={`guided-led${item.tone === 'idle' ? ' guided-led-idle' : ''}`} aria-hidden="true" />{item.label}</li>
+            ))}
+          </ul>
+        ) : null}
       </aside>
 
-      <main className="guided-workspace" id="workflow">
+      <main className="guided-workspace" id="workflow" {...backgroundModalProps}>
+        <div className="guided-topbar">
         <header className="guided-header" aria-label="Project header">
+          {breadcrumb && breadcrumb.length > 0 ? (
+            <nav className="guided-breadcrumb" aria-label="Breadcrumb">
+              {breadcrumb.join(' / ')}
+            </nav>
+          ) : null}
           <div>
             <p className="guided-kicker">ACTIVE PROJECT / NEXT ACTION</p>
             <h1>{presentation.title}</h1>
@@ -109,6 +144,7 @@ export function GuidedWorkflowShell({
             })}
           </ol>
         </nav>
+        </div>
 
         <section className="guided-task" aria-label="Current workflow task">
           <div className="guided-task-heading">
@@ -116,7 +152,7 @@ export function GuidedWorkflowShell({
               <p className="guided-kicker">CURRENT TASK</p>
               <h2>{presentation.title}</h2>
             </div>
-            <button ref={inspectorTriggerRef} className="guided-inspector-trigger" type="button" aria-label="Open contextual inspector" aria-controls="workflow-inspector" onClick={() => openInspector('inspector')}>
+            <button ref={inspectorTriggerRef} className="guided-inspector-trigger" type="button" aria-label="Open contextual inspector" aria-controls="workflow-inspector" onClick={(event) => openInspector('inspector', event.currentTarget)}>
               Inspect details
             </button>
           </div>
@@ -131,14 +167,38 @@ export function GuidedWorkflowShell({
         </section>
       </main>
 
-      <aside className="guided-inspector" id="workflow-inspector" aria-label="Contextual inspector">
+      <aside className="guided-inspector" id="workflow-inspector" aria-label="Contextual inspector" {...backgroundModalProps}>
         <p className="guided-kicker">CONTEXTUAL INSPECTOR</p>
         <h2>Why progress is here</h2>
         {inspector}
       </aside>
       {isInspectorOpen && usesInspectorDrawer ? (
         <div className="guided-inspector-backdrop" onClick={closeInspector}>
-          <aside className="guided-inspector-drawer" role="dialog" aria-modal="true" aria-label="Contextual inspector" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key === 'Escape') closeInspector() }}>
+          <aside
+            className="guided-inspector-drawer"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Contextual inspector"
+            onClick={(event) => event.stopPropagation()}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                closeInspector()
+                return
+              }
+              if (event.key !== 'Tab') return
+              const focusable = [...event.currentTarget.querySelectorAll<HTMLElement>('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled])')]
+              const first = focusable[0]
+              const last = focusable.at(-1)
+              if (!first || !last) return
+              if (event.shiftKey && document.activeElement === first) {
+                event.preventDefault()
+                last.focus()
+              } else if (!event.shiftKey && document.activeElement === last) {
+                event.preventDefault()
+                first.focus()
+              }
+            }}
+          >
             <div className="guided-drawer-heading">
               <div><p className="guided-kicker">CONTEXTUAL INSPECTOR</p><h2>Why progress is here</h2></div>
               <button ref={closeInspectorRef} className="guided-inspector-trigger" type="button" onClick={closeInspector}>Close details</button>
