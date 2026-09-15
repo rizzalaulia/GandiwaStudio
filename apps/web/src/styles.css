@@ -72,10 +72,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .panel span { color: var(--muted); line-height: 1.45; }
 
 /* Issue #56 Canonical Hybrid guided workflow shell. */
-.guided-shell { min-height: 100vh; display: grid; grid-template-columns: 252px minmax(0, 1fr) 340px; color: var(--text); background: var(--canvas); }
-.app-shell-guided { display: block; background: var(--canvas); }
+.guided-shell { min-height: 100vh; display: grid; grid-template-columns: 252px minmax(0, 1fr) 340px; grid-template-rows: 1fr auto; color: var(--text); background: var(--canvas); }
+.app-shell-guided { display: block; min-height: 0; background: var(--canvas); }
 .workspace-guided { width: 100%; max-width: none; margin: 0; padding: 0; }
-.guided-sidebar { display: flex; flex-direction: column; justify-content: space-between; padding: 24px 16px; color: #e9eef7; background: var(--navy); }
+.guided-sidebar { grid-row: 1 / -1; display: flex; flex-direction: column; justify-content: space-between; padding: 24px 16px; color: #e9eef7; background: var(--navy); }
 .guided-brand, .guided-label, .guided-nav-heading, .guided-kicker { margin: 0; font-size: .68rem; font-weight: 800; letter-spacing: .11em; }
 .guided-brand { padding: 0 10px 20px; color: #fff; }
 .guided-label, .guided-nav-heading { color: #aebed0; }
@@ -219,8 +219,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   .guided-step { grid-template-columns: 27px 1fr; align-items: center; }
   .guided-step small { margin-top: 0; }
 }
-.guided-project-region { margin-top: 28px; }
-.guided-project-actions { margin: 14px 0 0; }
+.guided-project-region { display: flex; flex-direction: column; margin-top: 0; min-height: 100vh; }
+.guided-project-actions { grid-column: 2 / -1; display: flex; justify-content: center; gap: 10px; margin: 0; padding: 8px 12px; border-top: 1px solid var(--line); background: var(--surface); }
 .guided-task-outlet label, .guided-task-outlet input, .guided-task-outlet select, .guided-task-outlet textarea { display: block; width: 100%; margin-top: 9px; }
 .guided-task-outlet label:not(.guided-file-cta) { color: var(--muted); font-size: .78rem; font-weight: 700; }
 .guided-task-outlet input, .guided-task-outlet select, .guided-task-outlet textarea { min-height: 42px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--text); padding: 9px 10px; }
@@ -240,7 +240,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .guided-inspector .status-card ul { padding-left: 18px; color: var(--muted); font-size: .78rem; }
 .guided-inspector .audit-context { font-size: .7rem; }
 @media (min-width: 1280px) {
-  .guided-shell { min-height: 640px; }
+  .guided-shell { flex: 1 1 auto; min-height: 100%; }
+  .guided-task { max-width: 900px; }
 }
 @media (max-width: 1279px) {
   .guided-project-region { overflow: hidden; }

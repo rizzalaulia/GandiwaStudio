@@ -38,6 +38,7 @@ venv/
 *.db
 *.db-shm
 *.db-wal
+var/
 
 # Hermes local handoff
 .hermes-gandiwa-studio-2-handoff.md

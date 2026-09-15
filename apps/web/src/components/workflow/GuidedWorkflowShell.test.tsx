@@ -175,4 +175,23 @@ describe('GuidedWorkflowShell', () => {
 
     expect(projectFiles).toHaveFocus()
   })
+
+  it('keeps project lifecycle actions inside the guided shell frame', () => {
+    render(
+      <GuidedWorkflowShell
+        projectName="Botanical Forms"
+        assetSummary="Illustration · revision r002"
+        presentation={presentation}
+        onOpenInspector={() => undefined}
+        task={<button data-testid="primary-workflow-action">Complete metadata</button>}
+        inspector={<p>Details</p>}
+        projectActions={<button>Check for external changes</button>}
+      />,
+    )
+
+    const shell = document.querySelector('.guided-shell')
+    const actions = document.querySelector('.guided-project-actions')
+    expect(actions).not.toBeNull()
+    expect(shell?.contains(actions)).toBe(true)
+  })
 })

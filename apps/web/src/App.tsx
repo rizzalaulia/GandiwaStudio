@@ -1118,40 +1118,42 @@ export function App() {
               }}
               task={workflowTask}
               inspector={workflowInspector}
+              projectActions={
+                <>
+                  <button className="button button-secondary" aria-label="Open Project" disabled={isOpening} onClick={() => void handleOpenProject()}>Open another project</button>
+                  <button className="button button-secondary" aria-label="Reopen remembered project" disabled={isOpening || !rememberedDirectory} onClick={handleReopenProject}>Reopen remembered project</button>
+                  <button ref={externalChangeCheckerRef} className="button button-secondary" onClick={() => void checkExternalManifestChange()}>Check for external changes</button>
+                  <button
+                    className="button button-secondary"
+                    onClick={() => {
+                      activeProjectRef.current = null
+                      approvalContextSequence.current += 1
+                      approvalOperationSequence.current += 1
+                      exportOperationSequence.current += 1
+                      preflightSequence.current += 1
+                      setExporting(false)
+                      setExportMessage(null)
+                      setExternalManifestDecision(null)
+                      setActiveProject(null)
+                      setRasterReport(null)
+                      setSvgReport(null)
+                      setAuditReport(null)
+                      setApprovalSubmission(null)
+                      setDurableAudit(null)
+                      setDurableAuditSnapshot(undefined)
+                      setDurableAuditChecksum(null)
+                      setApproval(null)
+                      setPreviousApprovalSnapshot(undefined)
+                      setApprovalGate({ status: 'NOT READY', adobeReady: false, exportGate: 'BLOCKED', reasons: ['No active project exists.'] })
+                      setApprovalMessage(null)
+                      setLoadedMetadata(null)
+                    }}
+                  >
+                    Close project
+                  </button>
+                </>
+              }
             />
-            <div className="dialog-actions guided-project-actions">
-              <button className="button button-secondary" aria-label="Open Project" disabled={isOpening} onClick={() => void handleOpenProject()}>Open another project</button>
-              <button className="button button-secondary" aria-label="Reopen remembered project" disabled={isOpening || !rememberedDirectory} onClick={handleReopenProject}>Reopen remembered project</button>
-              <button ref={externalChangeCheckerRef} className="button button-secondary" onClick={() => void checkExternalManifestChange()}>Check for external changes</button>
-              <button
-                className="button button-secondary"
-                onClick={() => {
-                  activeProjectRef.current = null
-                  approvalContextSequence.current += 1
-                  approvalOperationSequence.current += 1
-                  exportOperationSequence.current += 1
-                  preflightSequence.current += 1
-                  setExporting(false)
-                  setExportMessage(null)
-                  setExternalManifestDecision(null)
-                  setActiveProject(null)
-                  setRasterReport(null)
-                  setSvgReport(null)
-                  setAuditReport(null)
-                  setApprovalSubmission(null)
-                  setDurableAudit(null)
-                  setDurableAuditSnapshot(undefined)
-                  setDurableAuditChecksum(null)
-                  setApproval(null)
-                  setPreviousApprovalSnapshot(undefined)
-                  setApprovalGate({ status: 'NOT READY', adobeReady: false, exportGate: 'BLOCKED', reasons: ['No active project exists.'] })
-                  setApprovalMessage(null)
-                  setLoadedMetadata(null)
-                }}
-              >
-                Close project
-              </button>
-            </div>
           </section>
         ) : null}
 

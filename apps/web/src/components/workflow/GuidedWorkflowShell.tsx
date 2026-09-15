@@ -20,6 +20,7 @@ export type GuidedWorkflowShellProps = Readonly<{
   onOpenInspector: (intent?: 'project-files' | 'audit-history' | 'inspector') => void
   task: ReactNode
   inspector: ReactNode
+  projectActions?: ReactNode
 }>
 
 export function GuidedWorkflowShell({
@@ -31,6 +32,7 @@ export function GuidedWorkflowShell({
   onOpenInspector,
   task,
   inspector,
+  projectActions,
 }: GuidedWorkflowShellProps) {
   const [isInspectorOpen, setIsInspectorOpen] = useState(false)
   const [usesInspectorDrawer, setUsesInspectorDrawer] = useState(() => window.matchMedia?.('(max-width: 1279px)').matches ?? false)
@@ -172,6 +174,7 @@ export function GuidedWorkflowShell({
         <h2>Why progress is here</h2>
         {inspector}
       </aside>
+      {projectActions ? <div className="guided-project-actions">{projectActions}</div> : null}
       {isInspectorOpen && usesInspectorDrawer ? (
         <div className="guided-inspector-backdrop" onClick={closeInspector}>
           <aside
