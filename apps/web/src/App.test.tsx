@@ -634,4 +634,41 @@ describe('App shell', () => {
     expect(screen.getAllByText('Worker unavailable').length).toBeGreaterThan(0)
     expect(screen.getByRole('button', { name: /^Create Project$/i })).toBeEnabled()
   })
+
+  it('collapses to a single project chrome once a project is active', async () => {
+    const manifest = JSON.stringify({
+      schema_version: 1,
+      project_id: '6e9e0cd4-7b2e-46fc-84ad-5a40816bdca1',
+      project_name: 'Burung Laut',
+      assets: [],
+    })
+    const directory = {
+      queryPermission: vi.fn(() => Promise.resolve<'granted'>('granted')),
+      requestPermission: vi.fn(() => Promise.resolve<'granted'>('granted')),
+      getFileHandle: vi.fn(() => Promise.resolve({ getFile: () => Promise.resolve({ text: () => Promise.resolve(manifest) }) })),
+    }
+    vi.stubGlobal('showDirectoryPicker', vi.fn(() => Promise.resolve(directory)))
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        version: '0.0.0',
+        mvp_version: 'mvp-1.0',
+        backend: { health: 'ok', ready: true, checks: {} },
+        worker: { status: 'idle', heartbeat_at: null },
+      }),
+    }))
+
+    render(<App />)
+    await waitFor(() => expect(screen.getByText('Backend connected')).toBeVisible())
+    fireEvent.click(screen.getByRole('button', { name: /^Open Project$/i }))
+    await waitFor(() => expect(screen.getByRole('region', { name: 'Active project' })).toHaveTextContent('Burung Laut'))
+
+    expect(screen.queryByRole('heading', { name: 'Start a project' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Creative workspace')).not.toBeInTheDocument()
+    expect(screen.getAllByText('GANDIWA STUDIO')).toHaveLength(1)
+    expect(screen.queryByRole('button', { name: /^Create Project$/i })).not.toBeInTheDocument()
+    expect(screen.queryByText('Create a local project workspace.')).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Runtime status' })).not.toBeInTheDocument()
+    expect(screen.getByRole('navigation', { name: 'Production workflow' })).toBeVisible()
+  })
 })

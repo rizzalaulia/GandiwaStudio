@@ -14,6 +14,8 @@ import { resolveApprovalSubmission, type ApprovalSubmission, type SubmissionDire
 import { evaluateApprovalGate, type ApprovalGateResult, type DurableAuditSnapshot, type ApprovalRecord } from './approval-gate'
 import type { AuditDirectory } from './durable-audit-store'
 import { resolveExportPackageCandidate, writeExportPackage, type ExportPackageCandidate } from './export-package'
+import { getGuidedWorkflowPresentation, type GuidedWorkflowInput } from './workflow/guided-workflow'
+import { GuidedWorkflowShell } from './components/workflow/GuidedWorkflowShell'
 
 const AUDIT_RULESET_ID = 'adobe-stock-2026-09-08-v1'
 const AUDIT_RULESET_VERSION = AUDIT_RULESET_ID
@@ -84,6 +86,7 @@ export function ApprovalGatePanel({
   message,
   onAudit,
   onApprove,
+  mode = 'both',
 }: {
   gate: ApprovalGateResult
   asset: Readonly<{ assetId: string; revision: number }> | null
@@ -96,6 +99,7 @@ export function ApprovalGatePanel({
   message: string | null
   onAudit: () => void
   onApprove: () => void
+  mode?: 'audit' | 'approval' | 'both'
 }) {
   return (
     <section className="audit-center" aria-label="Approval and Adobe-ready gate">
@@ -116,8 +120,8 @@ export function ApprovalGatePanel({
       <p className="helper">Adobe-ready berarti gate Gandiwa lolos; ini bukan jaminan Adobe Stock akan menerima submission.</p>
       {message ? <p className="project-result" role="status">{message}</p> : null}
       <div className="dialog-actions">
-        <button className="button button-secondary" disabled={busy || !assetContext || !submission || !metadataValid} onClick={onAudit}>{busy ? 'Auditing revision…' : 'Audit prepared revision'}</button>
-        <button className="button button-primary" disabled={busy || gate.status !== 'READY FOR HUMAN APPROVAL'} onClick={onApprove}>I confirm this revision for manual Adobe Stock submission</button>
+        {(mode === 'audit' || mode === 'both') ? <button className="button button-secondary" disabled={busy || !assetContext || !submission || !metadataValid} onClick={onAudit}>{busy ? 'Auditing revision…' : 'Audit prepared revision'}</button> : null}
+        {(mode === 'approval' || mode === 'both') ? <button className="button button-primary" disabled={busy || gate.status !== 'READY FOR HUMAN APPROVAL'} onClick={onApprove}>I confirm this revision for manual Adobe Stock submission</button> : null}
       </div>
     </section>
   )
@@ -272,6 +276,7 @@ export function App() {
   const [loadedMetadata, setLoadedMetadata] = useState<LoadedStockMetadata | null>(null)
   const [metadataMessage, setMetadataMessage] = useState<string | null>(null)
   const [isSavingMetadata, setSavingMetadata] = useState(false)
+  const [inspectorView, setInspectorView] = useState<'inspector' | 'project-files' | 'audit-history'>('inspector')
   const activeProjectRef = useRef<ActiveProject | null>(null)
   const requestSequence = useRef(0)
   const preflightSequence = useRef(0)
@@ -281,6 +286,10 @@ export function App() {
   const createProjectOpenerRef = useRef<HTMLButtonElement>(null)
   const externalChangeCheckerRef = useRef<HTMLButtonElement>(null)
   const externalManifestReloadRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    if (externalManifestDecision) externalManifestReloadRef.current?.focus()
+  }, [externalManifestDecision])
 
   const refresh = useCallback(async () => {
     const requestId = ++requestSequence.current
@@ -309,10 +318,6 @@ export function App() {
       requestSequence.current += 1
     }
   }, [refresh])
-
-  useEffect(() => {
-    if (externalManifestDecision) externalManifestReloadRef.current?.focus()
-  }, [externalManifestDecision])
 
   useEffect(() => {
     setRasterReport(null)
@@ -859,9 +864,165 @@ export function App() {
   const statusLabel = runtime?.worker.status === 'running' ? 'Worker online' : runtime?.worker.status === 'idle' ? 'Worker idle' : runtime?.worker.status === 'stopped' ? 'Worker stopped' : 'Worker unavailable'
   const backendLabel = runtime?.backend.ready ? 'Backend ready' : 'Backend needs attention'
   const isBackendHealthy = runtime?.backend.ready ?? false
+  const activeAsset = activeProject?.manifest.assets.at(-1)
+  const activeRevision = activeAsset?.revisions.at(-1)
+  const durableAuditVerdict = durableAudit?.findings.some((finding) => finding.verdict === 'FAIL')
+    ? 'blocked'
+    : durableAudit?.findings.some((finding) => finding.verdict === 'WARNING')
+      ? 'warning'
+      : durableAudit
+        ? 'pass'
+        : approvalGate.status === 'STALE / BLOCKED'
+          ? 'stale'
+          : 'required'
+  const guidedWorkflowInput: GuidedWorkflowInput = {
+    project: activeProject ? 'active' : 'none',
+    hasAsset: Boolean(activeAsset),
+    revision: activeRevision ? 'current' : 'required',
+    metadata: loadedMetadata ? 'current' : 'required',
+    audit: durableAuditVerdict,
+    approvalGate: approvalGate.status,
+    export: isExporting ? 'running' : exportMessage?.includes('written locally') ? 'success' : 'idle',
+    blockers: approvalGate.reasons,
+  }
+  const workflowPresentation = getGuidedWorkflowPresentation(guidedWorkflowInput)
+  const preflightTools = (
+    <details className="guided-secondary-tools">
+      <summary>Inspect a candidate temporarily</summary>
+      <p className="helper">Preflight is non-durable. It never creates a source, asset, or revision.</p>
+      <label htmlFor="raster-content-type">Raster candidate content type</label>
+      <select id="raster-content-type" value={rasterContentType} disabled={isPreflightingRaster} onChange={(event) => setRasterContentType(event.target.value as Exclude<ContentType, 'vector'>)}>
+        <option value="photo">Photo</option><option value="illustration">Illustration</option>
+      </select>
+      <label htmlFor="raster-file">Raster file to preflight</label>
+      <input id="raster-file" type="file" accept="image/jpeg,image/png,.jpeg,.jpg,.png" disabled={isPreflightingRaster} onChange={(event) => void handleRasterFileSelection(event)} />
+      {isPreflightingRaster ? <p className="project-result" role="status">Inspecting raster bytes…</p> : null}
+      {rasterMessage ? <p className="project-result" role="alert">{rasterMessage}</p> : null}
+      <label htmlFor="svg-content-type">SVG candidate content type</label>
+      <select id="svg-content-type" value={svgContentType} disabled={isPreflightingSvg} onChange={(event) => setSvgContentType(event.target.value as Extract<ContentType, 'illustration' | 'vector'>)}>
+        <option value="vector">Vector</option><option value="illustration">Illustration vector</option>
+      </select>
+      <label htmlFor="svg-file">SVG file to preflight</label>
+      <input id="svg-file" type="file" accept="image/svg+xml,.svg" disabled={isPreflightingSvg} onChange={(event) => void handleSvgFileSelection(event)} />
+      {isPreflightingSvg ? <p className="project-result" role="status">Inspecting SVG security boundary…</p> : null}
+      {svgMessage ? <p className="project-result" role="alert">{svgMessage}</p> : null}
+    </details>
+  )
+
+  const preparationTask = (
+    <section aria-label="Revision preparation">
+      <p className="guided-kicker">DURABLE PREPARATION</p>
+      <p className="helper">Create a new submission revision in the browser-owned folder. The selected source is never overwritten.</p>
+      <label className="guided-file-cta" htmlFor="raster-preparation-file">{isPreparingRaster ? 'Preparing JPEG submission revision…' : 'Choose master and prepare revision'}</label>
+      <input className="guided-visually-hidden" id="raster-preparation-file" type="file" accept="image/jpeg,image/png,.jpeg,.jpg,.png" disabled={isPreparingRaster} onChange={(event) => void handleRasterPreparation(event)} />
+      {isPreparingRaster ? <p className="project-result" role="status">Preparing JPEG submission revision…</p> : null}
+      {preparationMessage ? <p className="project-result" role="status">{preparationMessage}</p> : null}
+      {preflightTools}
+    </section>
+  )
+
+  const metadataTask = activeProject && activeAsset ? (
+    <section aria-label="Stock metadata editor">
+      <p className="guided-kicker">STOCK METADATA & AI DISCLOSURE</p>
+      <p className="helper">Saved as a browser-local sidecar. Asset content type and creation method remain immutable provenance.</p>
+      <p className="guided-provenance">Asset <code>{activeAsset.asset_id}</code> · provenance: {activeAsset.content_type} · {activeAsset.creation_method}</p>
+      <button className="button button-primary guided-primary-action" disabled={isSavingMetadata || !assessStockMetadata(stockMetadata, { contentType: activeAsset.content_type, creationMethod: activeAsset.creation_method }).valid} onClick={() => void saveMetadata()}>{isSavingMetadata ? 'Saving metadata…' : 'Save metadata locally'}</button>
+      <label htmlFor="stock-content-type">Submission content type</label>
+      <select id="stock-content-type" value={stockMetadata.contentType} disabled={isSavingMetadata} onChange={(event) => setStockMetadata({ ...stockMetadata, contentType: event.target.value as StockMetadataDraft['contentType'] })}>
+        <option value="photo">Photo</option><option value="illustration">Illustration</option><option value="vector">Vector</option>
+      </select>
+      <label htmlFor="stock-creation-method">Submission creation method</label>
+      <select id="stock-creation-method" value={stockMetadata.creationMethod} disabled={isSavingMetadata} onChange={(event) => setStockMetadata({ ...stockMetadata, creationMethod: event.target.value as StockMetadataDraft['creationMethod'] })}>
+        <option value="camera">Camera</option><option value="manual_digital">Manual digital</option><option value="generative_ai">Generative AI</option><option value="mixed">Mixed</option>
+      </select>
+      <label htmlFor="stock-title">Title</label>
+      <input id="stock-title" value={stockMetadata.title} disabled={isSavingMetadata} onChange={(event) => setStockMetadata({ ...stockMetadata, title: event.target.value })} />
+      <label htmlFor="stock-keywords">Keywords (comma-separated; ordered)</label>
+      <input id="stock-keywords" value={stockMetadata.keywords.join(', ')} disabled={isSavingMetadata} onChange={(event) => setStockMetadata({ ...stockMetadata, keywords: event.target.value.split(',') })} />
+      <label htmlFor="stock-category">Category</label>
+      <input id="stock-category" value={stockMetadata.category} disabled={isSavingMetadata} onChange={(event) => setStockMetadata({ ...stockMetadata, category: event.target.value })} />
+      <label><input type="checkbox" checked={stockMetadata.generatedWithAi} disabled={isSavingMetadata} onChange={(event) => setStockMetadata({ ...stockMetadata, generatedWithAi: event.target.checked })} /> Generated with AI</label>
+      <label htmlFor="ai-disclosure">AI disclosure</label>
+      <textarea id="ai-disclosure" value={stockMetadata.aiDisclosure} disabled={isSavingMetadata} onChange={(event) => setStockMetadata({ ...stockMetadata, aiDisclosure: event.target.value })} />
+      <label htmlFor="release-status">Release status</label>
+      <select id="release-status" value={stockMetadata.releaseStatus} disabled={isSavingMetadata} onChange={(event) => setStockMetadata({ ...stockMetadata, releaseStatus: event.target.value as StockMetadataDraft['releaseStatus'] })}>
+        <option value="not_required">Not required</option><option value="attached">Attached</option><option value="needs_review">Needs review</option>
+      </select>
+      {assessStockMetadata(stockMetadata, { contentType: activeAsset.content_type, creationMethod: activeAsset.creation_method }).warnings.map((warning) => <p className="helper" key={warning}>Warning: {warning}</p>)}
+      {metadataMessage ? <p className="project-result" role="status">{metadataMessage}</p> : null}
+    </section>
+  ) : <p className="helper">Prepare an asset revision before editing stock metadata.</p>
+
+  const auditTask = activeProject && activeAsset ? <ApprovalGatePanel gate={approvalGate} asset={approvalSubmission ? { assetId: approvalSubmission.assetId, revision: approvalSubmission.revision } : null} audit={durableAudit} submission={approvalSubmission} metadataValid={Boolean(loadedMetadata)} metadataChecksum={approvalSubmission?.metadataChecksum ?? null} auditChecksum={durableAuditChecksum} busy={isApprovalBusy} message={approvalMessage} onAudit={() => void auditPreparedRevision()} onApprove={() => void approveCurrentRevision()} mode="audit" /> : <p className="helper">Prepare an asset revision and valid metadata before running the audit.</p>
+  const approvalTask = activeProject && activeAsset ? <ApprovalGatePanel gate={approvalGate} asset={approvalSubmission ? { assetId: approvalSubmission.assetId, revision: approvalSubmission.revision } : null} audit={durableAudit} submission={approvalSubmission} metadataValid={Boolean(loadedMetadata)} metadataChecksum={approvalSubmission?.metadataChecksum ?? null} auditChecksum={durableAuditChecksum} busy={isApprovalBusy} message={approvalMessage} onAudit={() => void auditPreparedRevision()} onApprove={() => void approveCurrentRevision()} mode="approval" /> : <p className="helper">Approval requires current metadata and durable audit evidence.</p>
+  const exportTask = activeProject && activeAsset ? (
+    <section className="guided-export-task" aria-label="Portable export package">
+      <p className="guided-kicker">PORTABLE EXPORT PACKAGE</p>
+      <p className="helper">Browser-local only. Gandiwa revalidates the latest approved evidence before writing.</p>
+      <button className="button button-primary" disabled={isExporting || isApprovalBusy || approvalGate.exportGate !== 'CLEAR'} onClick={() => void handleExport()}>{isExporting ? 'Writing export package…' : exportMessage?.includes('written locally') ? 'Export another package' : 'Export approved package'}</button>
+      {exportMessage ? <p className="project-result" role="status">{exportMessage}</p> : null}
+    </section>
+  ) : <p className="helper">Export becomes available only after current human approval.</p>
+  const workflowTask = workflowPresentation.activeStep === 'prepare'
+    ? preparationTask
+    : workflowPresentation.activeStep === 'metadata'
+      ? metadataTask
+      : workflowPresentation.activeStep === 'audit'
+        ? auditTask
+        : workflowPresentation.activeStep === 'approval'
+          ? approvalTask
+          : workflowPresentation.activeStep === 'export'
+            ? exportTask
+            : <p className="helper">Open or create a local project to begin.</p>
+  const workflowInspector = inspectorView === 'project-files' ? (
+    <>
+      <p className="guided-kicker">PROJECT FILES</p>
+      <h3>Current browser-local project context</h3>
+      <ul className="guided-inspector-list">
+        <li>Manifest v{activeProject?.manifest.schema_version} · {activeProject?.manifest.assets.length ?? 0} asset(s)</li>
+        <li>{activeAsset ? `Asset ${activeAsset.asset_id} · ${activeAsset.content_type} · ${activeAsset.creation_method}` : 'No durable asset has been prepared yet.'}</li>
+        <li>{activeRevision ? `Current revision ${activeRevision.revision}` : 'No current durable revision exists.'}</li>
+      </ul>
+      <p className="helper">This is a browser-owned project folder. Gandiwa does not upload or write your source files through the backend.</p>
+    </>
+  ) : inspectorView === 'audit-history' ? (
+    <>
+      <p className="guided-kicker">AUDIT HISTORY</p>
+      <h3>Current durable audit evidence</h3>
+      {auditReport ? <AuditCenterPanel audit={auditReport} /> : durableAudit ? <ul className="guided-inspector-list"><li>Asset <code>{durableAudit.assetId}</code> · revision {durableAudit.revision}</li><li>Ruleset {durableAudit.rulesetId} / {durableAudit.rulesetVersion}</li><li>Created {durableAudit.createdAt}</li><li>{durableAudit.findings.length} finding(s) bound to this evidence snapshot</li></ul> : <p className="helper">No durable audit evidence exists for the current revision yet. Run the audit after metadata is current.</p>}
+      <p className="helper">Only evidence bound to the current revision, metadata, checksum, and ruleset can clear the next gate.</p>
+    </>
+  ) : (
+    <>
+      <p>{workflowPresentation.explanation}</p>
+      {workflowPresentation.blockers.length > 0 ? <ul className="guided-inspector-list">{workflowPresentation.blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}</ul> : null}
+      {auditReport ? <AuditCenterPanel audit={auditReport} /> : <p className="helper">Technical evidence is not available until a current preflight or durable audit has run.</p>}
+      {rasterReport ? (
+        <section className={`status-card status-${rasterReport.verdict}`} aria-label="Raster preflight result">
+          <div>
+            <strong>Technical preflight: {rasterReport.verdict.toUpperCase()}</strong>
+            <p>{rasterReport.width ?? 'unknown'} × {rasterReport.height ?? 'unknown'} px · {rasterReport.megapixels ?? 'unknown'} MP · alpha: {rasterReport.has_alpha === null ? 'unknown' : rasterReport.has_alpha ? 'yes' : 'no'}</p>
+            <p>Eligible for JPEG submission: {rasterReport.eligible_for_submission ? 'yes' : 'no'}</p>
+          </div>
+          {rasterReport.findings.length > 0 ? <ul>{rasterReport.findings.map((finding) => <li key={finding.rule_id}><code>{finding.rule_id}</code>: {finding.message}</li>)}</ul> : null}
+        </section>
+      ) : null}
+      {svgReport ? (
+        <section className={`status-card status-${svgReport.verdict}`} aria-label="SVG preflight result">
+          <div>
+            <strong>SVG preflight: {svgReport.verdict.toUpperCase()}</strong>
+            <p>Eligible for SVG submission: {svgReport.eligible_for_submission ? 'yes' : 'no'}</p>
+            {svgReport.preview_url ? <img className="svg-raster-preview" src={svgReport.preview_url} alt="Safe SVG raster preview" /> : null}
+          </div>
+          {svgReport.findings.length > 0 ? <ul>{svgReport.findings.map((finding) => <li key={finding.rule_id}><code>{finding.rule_id}</code>: {finding.message}</li>)}</ul> : null}
+        </section>
+      ) : null}
+    </>
+  )
 
   return (
-    <main className="app-shell">
+    <main className={activeProject ? 'app-shell app-shell-guided' : 'app-shell'}>
+      {activeProject ? null : (
       <aside className="nav-panel">
         <div>
           <p className="eyebrow">GANDIWA STUDIO</p>
@@ -873,8 +1034,10 @@ export function App() {
           <span>{statusLabel}</span>
         </div>
       </aside>
+      )}
 
-      <section className="workspace" aria-busy={loading}>
+      <section className={activeProject ? 'workspace workspace-guided' : 'workspace'} aria-busy={loading}>
+        {activeProject ? null : (
         <header className="workspace-header">
           <div>
             <p className="eyebrow">PROJECT WORKSPACE</p>
@@ -884,8 +1047,9 @@ export function App() {
             MVP {runtime?.mvp_version ?? '…'}
           </div>
         </header>
+        )}
 
-        {error ? (
+        {activeProject ? null : error ? (
           <div className="status-card status-fail" role="alert">
             <div>
               <strong>Backend unavailable</strong>
@@ -905,6 +1069,8 @@ export function App() {
 
         {creationMessage ? <p className="project-result" role="status">{creationMessage}</p> : null}
 
+        {activeProject ? null : (
+        <>
         <div className="action-grid" aria-describedby="project-actions-help">
           <button ref={createProjectOpenerRef} className="action-card action-primary" aria-label="Create Project" onClick={openCreateDialog}>
             <span className="action-icon" aria-hidden="true">＋</span>
@@ -932,187 +1098,66 @@ export function App() {
         <p className="helper" id="project-actions-help">
           Create Project and Open Project use a Chrome or Edge folder picker. Reopen uses browser-local handle storage only; it does not sync project files.
         </p>
+        </>
+        )}
 
         {activeProject ? (
-          <section className="panel" aria-label="Active project">
-            <p className="eyebrow">ACTIVE PROJECT</p>
-            <strong>{activeProject.manifest.project_name}</strong>
-            <span>Manifest schema v{activeProject.manifest.schema_version}; {activeProject.manifest.assets.length} assets.</span>
-            <section className="raster-preflight" aria-label="Raster technical preflight">
-              <p className="eyebrow">RASTER TECHNICAL PREFLIGHT</p>
-              <p className="helper">Inspect a PNG or JPEG candidate temporarily. This does not write a source, asset, or revision to the project folder.</p>
-              <label htmlFor="raster-content-type">Candidate content type</label>
-              <select
-                id="raster-content-type"
-                value={rasterContentType}
-                disabled={isPreflightingRaster}
-                onChange={(event) => setRasterContentType(event.target.value as Exclude<ContentType, 'vector'>)}
-              >
-                <option value="photo">Photo</option>
-                <option value="illustration">Illustration</option>
-              </select>
-              <label htmlFor="raster-file">Raster file to preflight</label>
-              <input
-                id="raster-file"
-                type="file"
-                accept="image/jpeg,image/png,.jpeg,.jpg,.png"
-                disabled={isPreflightingRaster}
-                onChange={(event) => void handleRasterFileSelection(event)}
-              />
-              {isPreflightingRaster ? <p className="project-result" role="status">Inspecting raster bytes…</p> : null}
-              {rasterMessage ? <p className="project-result" role="alert">{rasterMessage}</p> : null}
-              <section className="raster-preparation" aria-label="Raster JPEG preparation">
-                <p className="eyebrow">JPEG SUBMISSION PREPARATION</p>
-                <p className="helper">Copy a PNG or JPEG master into a new local revision, then encode its JPEG submission at quality 92. The original file is not overwritten.</p>
-                <label htmlFor="raster-preparation-file">Raster master to prepare</label>
-                <input
-                  id="raster-preparation-file"
-                  type="file"
-                  accept="image/jpeg,image/png,.jpeg,.jpg,.png"
-                  disabled={isPreparingRaster}
-                  onChange={(event) => void handleRasterPreparation(event)}
-                />
-                {isPreparingRaster ? <p className="project-result" role="status">Preparing JPEG submission revision…</p> : null}
-                {preparationMessage ? <p className="project-result" role="status">{preparationMessage}</p> : null}
-              </section>
-              {rasterReport ? (
-                <div className={`status-card status-${rasterReport.verdict}`}>
-                  <div>
-                    <strong>Technical preflight: {rasterReport.verdict.toUpperCase()}</strong>
-                    <p>
-                      {rasterReport.width ?? 'unknown'} × {rasterReport.height ?? 'unknown'} px · {rasterReport.megapixels ?? 'unknown'} MP · alpha: {rasterReport.has_alpha === null ? 'unknown' : rasterReport.has_alpha ? 'yes' : 'no'}
-                    </p>
-                    <p>Eligible for JPEG submission: {rasterReport.eligible_for_submission ? 'yes' : 'no'}</p>
-                  </div>
-                  {rasterReport.findings.length > 0 ? (
-                    <ul>
-                      {rasterReport.findings.map((finding) => <li key={finding.rule_id}><code>{finding.rule_id}</code>: {finding.message}</li>)}
-                    </ul>
-                  ) : null}
-                </div>
-              ) : null}
-            </section>
-            <section className="raster-preflight" aria-label="SVG security preflight">
-              <p className="eyebrow">SVG SECURITY PREFLIGHT</p>
-              <p className="helper">Inspect SVG bytes temporarily. Unsafe SVG is never previewed directly; only a temporary PNG raster preview can be displayed.</p>
-              <label htmlFor="svg-content-type">Candidate content type</label>
-              <select
-                id="svg-content-type"
-                value={svgContentType}
-                disabled={isPreflightingSvg}
-                onChange={(event) => setSvgContentType(event.target.value as Extract<ContentType, 'illustration' | 'vector'>)}
-              >
-                <option value="vector">Vector</option>
-                <option value="illustration">Illustration vector</option>
-              </select>
-              <label htmlFor="svg-file">SVG file to preflight</label>
-              <input
-                id="svg-file"
-                type="file"
-                accept="image/svg+xml,.svg"
-                disabled={isPreflightingSvg}
-                onChange={(event) => void handleSvgFileSelection(event)}
-              />
-              {isPreflightingSvg ? <p className="project-result" role="status">Inspecting SVG security boundary…</p> : null}
-              {svgMessage ? <p className="project-result" role="alert">{svgMessage}</p> : null}
-              {svgReport ? (
-                <div className={`status-card status-${svgReport.verdict}`}>
-                  <div>
-                    <strong>SVG preflight: {svgReport.verdict.toUpperCase()}</strong>
-                    <p>Eligible for SVG submission: {svgReport.eligible_for_submission ? 'yes' : 'no'}</p>
-                    {svgReport.preview_url ? (
-                      <img
-                        className="svg-raster-preview"
-                        src={svgReport.preview_url}
-                        alt="Safe SVG raster preview"
-                      />
-                    ) : null}
-                  </div>
-                  {svgReport.findings.length > 0 ? (
-                    <ul>
-                      {svgReport.findings.map((finding) => <li key={finding.rule_id}><code>{finding.rule_id}</code>: {finding.message}</li>)}
-                    </ul>
-                  ) : null}
-                </div>
-              ) : null}
-            </section>
-            <section className="raster-preflight" aria-label="Stock metadata editor">
-              <p className="eyebrow">STOCK METADATA & AI DISCLOSURE</p>
-              <p className="helper">Saved locally as a metadata sidecar for the latest asset. Asset content type and creation method remain immutable provenance.</p>
-              {activeProject.manifest.assets.at(-1) ? (
+          <section className="guided-project-region" aria-label="Active project">
+            <GuidedWorkflowShell
+              projectName={activeProject.manifest.project_name}
+              assetSummary={activeAsset && activeRevision ? `${activeAsset.content_type} · revision ${activeRevision.revision}` : 'No asset yet'}
+              breadcrumb={['Projects', activeProject.manifest.project_name, activeAsset ? activeAsset.asset_id : 'no asset', activeRevision ? `revision ${activeRevision.revision}` : 'no revision']}
+              statusItems={[
+                { label: backendLabel, tone: isBackendHealthy ? 'ok' : 'warn' },
+                { label: statusLabel, tone: runtime?.worker.status === 'running' ? 'ok' : 'idle' },
+              ]}
+              presentation={workflowPresentation}
+              onOpenInspector={(intent = 'inspector') => {
+                setInspectorView(intent)
+                document.getElementById('workflow-inspector')?.scrollIntoView({ block: 'nearest' })
+              }}
+              task={workflowTask}
+              inspector={workflowInspector}
+              projectActions={
                 <>
-                  <p className="helper">Asset provenance: <code>{activeProject.manifest.assets.at(-1)?.asset_id}</code> · type: {activeProject.manifest.assets.at(-1)?.content_type} · method: {activeProject.manifest.assets.at(-1)?.creation_method}</p>
-                  <label htmlFor="stock-content-type">Submission content type</label>
-                  <select id="stock-content-type" value={stockMetadata.contentType} disabled={isSavingMetadata} onChange={(event) => setStockMetadata({ ...stockMetadata, contentType: event.target.value as StockMetadataDraft['contentType'] })}>
-                    <option value="photo">Photo</option><option value="illustration">Illustration</option><option value="vector">Vector</option>
-                  </select>
-                  <label htmlFor="stock-creation-method">Submission creation method</label>
-                  <select id="stock-creation-method" value={stockMetadata.creationMethod} disabled={isSavingMetadata} onChange={(event) => setStockMetadata({ ...stockMetadata, creationMethod: event.target.value as StockMetadataDraft['creationMethod'] })}>
-                    <option value="camera">Camera</option><option value="manual_digital">Manual digital</option><option value="generative_ai">Generative AI</option><option value="mixed">Mixed</option>
-                  </select>
-                  <label htmlFor="stock-title">Title</label>
-                  <input id="stock-title" value={stockMetadata.title} disabled={isSavingMetadata} onChange={(event) => setStockMetadata({ ...stockMetadata, title: event.target.value })} />
-                  <label htmlFor="stock-keywords">Keywords (comma-separated; ordered)</label>
-                  <input id="stock-keywords" value={stockMetadata.keywords.join(', ')} disabled={isSavingMetadata} onChange={(event) => setStockMetadata({ ...stockMetadata, keywords: event.target.value.split(',') })} />
-                  <label htmlFor="stock-category">Category</label>
-                  <input id="stock-category" value={stockMetadata.category} disabled={isSavingMetadata} onChange={(event) => setStockMetadata({ ...stockMetadata, category: event.target.value })} />
-                  <label><input type="checkbox" checked={stockMetadata.generatedWithAi} disabled={isSavingMetadata} onChange={(event) => setStockMetadata({ ...stockMetadata, generatedWithAi: event.target.checked })} /> Generated with AI</label>
-                  <label htmlFor="ai-disclosure">AI disclosure</label>
-                  <textarea id="ai-disclosure" value={stockMetadata.aiDisclosure} disabled={isSavingMetadata} onChange={(event) => setStockMetadata({ ...stockMetadata, aiDisclosure: event.target.value })} />
-                  <label htmlFor="release-status">Release status</label>
-                  <select id="release-status" value={stockMetadata.releaseStatus} disabled={isSavingMetadata} onChange={(event) => setStockMetadata({ ...stockMetadata, releaseStatus: event.target.value as StockMetadataDraft['releaseStatus'] })}>
-                    <option value="not_required">Not required</option><option value="attached">Attached</option><option value="needs_review">Needs review</option>
-                  </select>
-                  {assessStockMetadata(stockMetadata, { contentType: activeProject.manifest.assets.at(-1)!.content_type, creationMethod: activeProject.manifest.assets.at(-1)!.creation_method }).warnings.map((warning) => <p className="helper" key={warning}>Warning: {warning}</p>)}
-                  <button className="button button-primary" disabled={isSavingMetadata || !assessStockMetadata(stockMetadata, { contentType: activeProject.manifest.assets.at(-1)!.content_type, creationMethod: activeProject.manifest.assets.at(-1)!.creation_method }).valid} onClick={() => void saveMetadata()}>{isSavingMetadata ? 'Saving metadata…' : 'Save metadata locally'}</button>
-                  {metadataMessage ? <p className="project-result" role="status">{metadataMessage}</p> : null}
+                  <button className="button button-secondary" aria-label="Open Project" disabled={isOpening} onClick={() => void handleOpenProject()}>Open another project</button>
+                  <button className="button button-secondary" aria-label="Reopen remembered project" disabled={isOpening || !rememberedDirectory} onClick={handleReopenProject}>Reopen remembered project</button>
+                  <button ref={externalChangeCheckerRef} className="button button-secondary" onClick={() => void checkExternalManifestChange()}>Check for external changes</button>
+                  <button
+                    className="button button-secondary"
+                    onClick={() => {
+                      activeProjectRef.current = null
+                      approvalContextSequence.current += 1
+                      approvalOperationSequence.current += 1
+                      exportOperationSequence.current += 1
+                      preflightSequence.current += 1
+                      setExporting(false)
+                      setExportMessage(null)
+                      setExternalManifestDecision(null)
+                      setActiveProject(null)
+                      setRasterReport(null)
+                      setSvgReport(null)
+                      setAuditReport(null)
+                      setApprovalSubmission(null)
+                      setDurableAudit(null)
+                      setDurableAuditSnapshot(undefined)
+                      setDurableAuditChecksum(null)
+                      setApproval(null)
+                      setPreviousApprovalSnapshot(undefined)
+                      setApprovalGate({ status: 'NOT READY', adobeReady: false, exportGate: 'BLOCKED', reasons: ['No active project exists.'] })
+                      setApprovalMessage(null)
+                      setLoadedMetadata(null)
+                    }}
+                  >
+                    Close project
+                  </button>
                 </>
-              ) : <p className="helper">Prepare an asset revision before editing stock metadata.</p>}
-            </section>
-            {auditReport ? <AuditCenterPanel audit={auditReport} /> : null}
-            {activeProject.manifest.assets.length > 0 ? <ApprovalGatePanel gate={approvalGate} asset={approvalSubmission ? { assetId: approvalSubmission.assetId, revision: approvalSubmission.revision } : null} audit={durableAudit} submission={approvalSubmission} metadataValid={Boolean(loadedMetadata)} metadataChecksum={approvalSubmission?.metadataChecksum ?? null} auditChecksum={durableAuditChecksum} busy={isApprovalBusy} message={approvalMessage} onAudit={() => void auditPreparedRevision()} onApprove={() => void approveCurrentRevision()} /> : null}
-            {activeProject.manifest.assets.length > 0 ? (
-              <section className="audit-center" aria-label="Portable export package">
-                <p className="eyebrow">PORTABLE EXPORT PACKAGE</p>
-                <p className="helper">Browser-local only. Gandiwa revalidates the latest approved evidence before writing.</p>
-                <button className="button button-primary" disabled={isExporting || isApprovalBusy || approvalGate.exportGate !== 'CLEAR'} onClick={() => void handleExport()}>{isExporting ? 'Writing export package…' : 'Export approved package'}</button>
-                {exportMessage ? <p className="project-result" role="status">{exportMessage}</p> : null}
-              </section>
-            ) : null}
-            <div className="dialog-actions">
-              <button ref={externalChangeCheckerRef} className="button button-secondary" onClick={() => void checkExternalManifestChange()}>Check for external changes</button>
-              <button
-                className="button button-secondary"
-                onClick={() => {
-                  activeProjectRef.current = null
-                  approvalContextSequence.current += 1
-                  approvalOperationSequence.current += 1
-                  exportOperationSequence.current += 1
-                  preflightSequence.current += 1
-                  setExporting(false)
-                  setExportMessage(null)
-                  setExternalManifestDecision(null)
-                  setActiveProject(null)
-                  setRasterReport(null)
-                  setSvgReport(null)
-                  setAuditReport(null)
-                  setApprovalSubmission(null)
-                  setDurableAudit(null)
-                  setDurableAuditSnapshot(undefined)
-                  setDurableAuditChecksum(null)
-                  setApproval(null)
-                  setPreviousApprovalSnapshot(undefined)
-                  setApprovalGate({ status: 'NOT READY', adobeReady: false, exportGate: 'BLOCKED', reasons: ['No active project exists.'] })
-                  setApprovalMessage(null)
-                  setLoadedMetadata(null)
-                }}
-              >
-                Close project
-              </button>
-            </div>
+              }
+            />
           </section>
         ) : null}
 
+        {activeProject ? null : (
         <section className="runtime-grid" aria-label="Runtime status">
           <article className="panel">
             <p className="eyebrow">BACKEND HEALTH</p>
@@ -1125,6 +1170,7 @@ export function App() {
             <span>{runtime?.worker.heartbeat_at ? `Heartbeat ${new Date(runtime.worker.heartbeat_at).toLocaleTimeString()}` : 'No heartbeat available.'}</span>
           </article>
         </section>
+        )}
       </section>
 
       {externalManifestDecision ? (

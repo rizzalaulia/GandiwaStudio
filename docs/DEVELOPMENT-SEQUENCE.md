@@ -27,7 +27,7 @@ Urutan ini tidak boleh dilompati hanya karena fitur tahap berikutnya lebih menar
 TAHAP 1 — Aplikasi bisa dibuka
 TAHAP 2 — Bisa membuat dan membuka proyek
 TAHAP 3 — Bisa mengimpor dan memeriksa file
-TAHAP 4 — Bisa menyiapkan dan mengekspor file Adobe-ready
+TAHAP 4 — Bisa menyiapkan dan mengekspor file Adobe-ready, dengan workflow UI terpandu
 TAHAP 5 — Bisa generate melalui API pilihan pengguna
 TAHAP 6 — Bisa mengedit vector secara ringan
 TAHAP 7 — Uji MVP end-to-end
@@ -131,6 +131,11 @@ TAHAP 7 — Uji MVP end-to-end
 
 **Tujuan:** memasukkan hasil AI ke pipeline yang sudah terbukti, bukan membuat pipeline bergantung kepada AI.
 
+> **Gate UX P0:** Issue #56 adalah remediasi Tahap 4 yang wajib selesai
+> sebelum UI Tahap 5 atau Tahap 6 dimulai. Pekerjaan backend/provider Tahap 5
+> boleh berjalan jika tidak menambah atau mengandalkan pola Active Project
+> Workspace lama. Issue #26 secara langsung bergantung pada #56.
+
 **Cakupan:**
 
 - konektor wajib 9Router dan fal.ai;
@@ -200,9 +205,9 @@ Pekerjaan implementasi pertama adalah **Tahap 1 — Aplikasi Dasar Hidup**. Taha
 | 1. Aplikasi dasar | NEXT | Gate Tahap 1 lulus |
 | 2. Pengelolaan proyek | BLOCKED | Tahap 1 lulus |
 | 3. Import dan pemeriksaan | BLOCKED | Tahap 2 lulus |
-| 4. Persiapan dan export | BLOCKED | Tahap 3 lulus |
-| 5. Generasi API | BLOCKED | Tahap 4 lulus |
-| 6. Editor SVG ringan | BLOCKED | Tahap 5 lulus |
+| 4. Persiapan dan export | BLOCKED | Tahap 3 lulus; remediasi UX #56 lulus sebelum UI tahap berikutnya |
+| 5. Generasi API | BLOCKED | Tahap 4 lulus; UI #26 menunggu gate UX #56 |
+| 6. Editor SVG ringan | BLOCKED | Tahap 5 lulus; #27 tetap menunggu #26 → #56 |
 | 7. Verifikasi MVP | BLOCKED | Tahap 6 lulus |
 
 ## 7. Change Control
@@ -217,3 +222,22 @@ Perubahan urutan atau scope harus mencatat:
 6. persetujuan eksplisit pemilik produk.
 
 Tanpa enam hal tersebut, urutan dalam dokumen ini tetap berlaku.
+
+### Change request 2026-09-14 — Gate UX P0 #56
+
+1. **Masalah baseline:** manual browser review Tahap 4 menunjukkan Active
+   Project Workspace menumpuk preflight, preparation, metadata, audit,
+   approval, dan export tanpa hirarki/tindakan utama yang terbaca; pengalaman
+   kerja menjadi kacau dan merusak usability.
+2. **Perubahan:** #56 menjadi remediasi Tahap 4 yang harus selesai sebelum UI
+   generation #26. Karena #27 bergantung pada #26, UI Tahap 6 ikut tertahan.
+3. **Alternatif:** (a) meneruskan #26 di shell lama ditolak karena akan
+   memperbesar beban visual; (b) menahan seluruh backend/provider Tahap 5
+   ditolak karena kontrak non-UI dapat diuji tanpa memperburuk workspace.
+4. **Dampak:** UX menjadi gate eksplisit; tidak mengubah keamanan, ownership
+   local-first, evidence fail-closed, atau manifest v1. Jadwal UI #26/#27
+   mundur sampai acceptance #56 terpenuhi.
+5. **Dokumen sinkron:** `DEVELOPMENT-SEQUENCE.md`, dependency graph, issue
+   #56, dan dependency #26.
+6. **Persetujuan pemilik produk:** Master Peng memberi titah 2026-09-14:
+   “oke buat issue p0 sekarang, commit lalu push”.
