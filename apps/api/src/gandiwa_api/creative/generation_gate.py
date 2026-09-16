@@ -143,9 +143,12 @@ def _check_no_unresolved_placeholders(session: CreativeSession) -> GateCheck:
     )
 
 
-def _check_capability_match(session: CreativeSession) -> GateCheck:
+def _check_capability_match(
+    session: CreativeSession,
+    image_capable_models: frozenset[str],
+) -> GateCheck:
     model_id = session.prompt.model_id.strip()
-    ok = model_id in _IMAGE_CAPABLE_MODELS
+    ok = model_id in image_capable_models
     return GateCheck(
         name="capability_match",
         ok=ok,
@@ -155,8 +158,17 @@ def _check_capability_match(session: CreativeSession) -> GateCheck:
     )
 
 
-def evaluate_generation_readiness(session: CreativeSession) -> GateDecision:
-    """Evaluate every deterministic GENERATION_READY check for one session."""
+def evaluate_generation_readiness(
+    session: CreativeSession,
+    *,
+    image_capable_models: set[str] | frozenset[str] | None = None,
+) -> GateDecision:
+    """Evaluate every deterministic GENERATION_READY check for one session.
+
+    A connector may pass its registered capability set. Unknown models fail
+    closed; the fal.ai defaults retain the current connector's behavior.
+    """
+    capabilities = frozenset(image_capable_models or _IMAGE_CAPABLE_MODELS)
     checks = [
         _check_prompt_present(session),
         _check_negative_prompt_present(session),
@@ -166,7 +178,7 @@ def evaluate_generation_readiness(session: CreativeSession) -> GateDecision:
         _check_aspect_ratio_and_orientation(session),
         _check_stock_constraints_present(session),
         _check_no_unresolved_placeholders(session),
-        _check_capability_match(session),
+        _check_capability_match(session, capabilities),
     ]
     blockers = [check.name for check in checks if not check.ok]
     return GateDecision(

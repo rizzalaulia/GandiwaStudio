@@ -74,6 +74,15 @@ class DispatchedPrompt(BaseModel):
     rejection_reason: str | None = None
 
 
+class CreativeApproval(BaseModel):
+    """Human approval evidence for one creative decision."""
+
+    stage: str
+    human: str
+    approved_at: str
+    prompt_digest: str | None = None
+
+
 class CreativeSession(BaseModel):
     """Top-level creative session sidecar (brainstorming through approvals)."""
 
@@ -81,7 +90,14 @@ class CreativeSession(BaseModel):
     prompt: PromptSnapshot = Field(default_factory=PromptSnapshot)
     approved_concept: str | None = None
     human_prompt_approval: bool = False
+    # SHA-256 of the exact prompt snapshot accepted by the human.
+    approved_prompt_digest: str | None = None
+    creative_approvals: list[CreativeApproval] = Field(default_factory=list)
+    # A regenerate reason belongs to a draft until provider success creates its revision.
+    pending_rejection_reason: str | None = None
     dispatched: bool = False
+    # Digest of the prompt snapshot most recently submitted to a provider.
+    last_dispatched_prompt_digest: str | None = None
     revisions: list[DispatchedPrompt] = Field(default_factory=list)
 
 
