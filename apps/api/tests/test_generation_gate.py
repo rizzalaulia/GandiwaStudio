@@ -197,6 +197,20 @@ def test_capability_match_with_selected_model(model_id: str, expected_ok: bool) 
         assert "capability_match" in decision.blockers
 
 
+def test_accepts_a_future_provider_model_when_its_capability_is_explicitly_registered() -> None:
+    session = _valid_session()
+    session.prompt.provider_id = "futuregen"
+    session.prompt.model_id = "futuregen/ultra-image"
+
+    decision = evaluate_generation_readiness(
+        session,
+        image_capable_models={"futuregen/ultra-image"},
+    )
+
+    assert decision.ready is True
+    assert decision.blockers == []
+
+
 def test_aggregates_every_blocking_failure_in_order() -> None:
     session = _valid_session()
     session.prompt.prompt_text = "Draft of <subject>"

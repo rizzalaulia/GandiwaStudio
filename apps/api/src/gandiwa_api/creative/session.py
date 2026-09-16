@@ -52,6 +52,8 @@ def import_prompt_from_assistant(
     stock_constraints: StockConstraints | None = None,
 ) -> CreativeSession:
     """Replace the working prompt with the assistant-authored draft."""
+    if session.dispatched:
+        raise PromptSnapshotFrozen("prompt snapshot is immutable after dispatch")
     session.prompt = PromptSnapshot(
         prompt_text=prompt_text,
         negative_prompt_text=negative_prompt_text,
@@ -97,6 +99,8 @@ def record_generation_provenance(
 ) -> None:
     """Bind provider execution facts to the most recent dispatched revision."""
     revision = _require_current_revision(session)
+    if revision.provenance is not None:
+        raise PromptSnapshotFrozen("revision already has provenance")
     revision.provenance = GenerationProvenance(
         provider_id=revision.provider_id,
         model_id=model_id or revision.model_id,
@@ -166,11 +170,28 @@ class SessionService:
             raise PromptSnapshotFrozen("prompt snapshot is immutable after dispatch")
         self._session.prompt.prompt_text = text
 
-    def dispatch(self) -> DispatchedPrompt:
-        """Freeze the current working prompt as a new immutable revision."""
+    def _freeze_initial_revision(self) -> DispatchedPrompt:
+        """Internal policy finalizer for the first successfully dispatched prompt."""
+        if self._session.dispatched:
+            raise PromptSnapshotFrozen(
+                "prompt is already dispatched; use regenerate with a change or rejection reason"
+            )
         revision = _snapshot_prompt(self._session)
         self._session.revisions.append(revision)
         self._session.dispatched = True
+        return revision
+
+    def finalize_pending_regeneration(self) -> DispatchedPrompt:
+        """Freeze the approved regenerate draft only after provider success."""
+        if self._session.pending_rejection_reason is None and (
+            self.current_revision is None
+            or self._session.prompt.prompt_text == self.current_revision.prompt_text
+        ):
+            raise PromptSnapshotFrozen("no pending regenerate draft exists")
+        revision = _snapshot_prompt(self._session)
+        revision.rejection_reason = self._session.pending_rejection_reason
+        self._session.revisions.append(revision)
+        self._session.pending_rejection_reason = None
         return revision
 
     def regenerate(
@@ -199,12 +220,16 @@ class SessionService:
             model_id=self.current_revision.model_id,
             target_width=self.current_revision.target_width,
             target_height=self.current_revision.target_height,
+            aspect_ratio=self.current_revision.aspect_ratio,
+            orientation=self.current_revision.orientation,
+            stock_constraints=self.current_revision.stock_constraints,
         )
-        revision = _snapshot_prompt(self._session)
-        revision.rejection_reason = rejection_reason
-        self._session.revisions.append(revision)
-        self._session.dispatched = True
-        return revision
+        # A regenerate draft always needs new human approval, even if it uses
+        # an identical prompt with a recorded rejection reason.
+        self._session.human_prompt_approval = False
+        self._session.approved_prompt_digest = None
+        self._session.pending_rejection_reason = rejection_reason
+        return _snapshot_prompt(self._session)
 
 
 __all__ = [
