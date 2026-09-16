@@ -138,19 +138,23 @@ TAHAP 7 — Uji MVP end-to-end
 
 **Cakupan:**
 
-- konektor wajib 9Router dan fal.ai;
+- konektor wajib: **fal.ai** sebagai image generator dan **9Router** sebagai assistant reasoning/vision/metadata (keputusan produk 2026-09-15, kontrak pada #58);
 - pengguna memilih connector backend yang sudah dikonfigurasi dan model secara eksplisit;
 - test connection dan capability validation;
+- gerbang pra-generasi **GENERATION_READY** (issue #58): prompt + negative prompt lengkap, target resolusi ≥ 4 MP dengan rasio eksplisit, stock constraints, dan capability match diverifikasi sebelum fal.ai dipanggil; manusia menyetujui prompt final terlebih dahulu (one-shot first: 1 prompt → 1 job → 1 gambar);
 - brief dan immutable ruleset constraints;
 - provenance: provider, model/revision jika tersedia, adapter version, prompt, seed, parameter, dan ruleset snapshot;
-- artifact hasil generate otomatis masuk ke revision/audit pipeline.
+- creative session sidecar (di luar manifest v1) mencatat brainstorming, prompt snapshot, vision review, metadata suggestion, dan persetujuan manusia (#58);
+- vision analysis bersifat advisory dan tidak pernah menggantikan gate deterministik;
+- artifact hasil generate otomatis masuk ke revision/audit pipeline sebagai revision baru.
 
 **Gate lulus:**
 
-- satu job 9Router dan satu job fal.ai berhasil end-to-end dengan credential backend yang tidak pernah dikomit atau dikirim ke browser;
-- kegagalan auth, quota, timeout, dan hasil invalid ditangani;
+- satu assistant job 9Router (brainstorm → prompt → vision/metadata) dan satu job fal.ai berhasil end-to-end dengan credential backend yang tidak pernah dikomit atau dikirim ke browser;
+- kegagalan auth, quota, timeout, hasil invalid, dan respons assistant yang gagal schema ditangani fail-closed;
 - Gandiwa tidak menjalankan routing/fallback lintas-provider;
-- generate tidak dapat dijalankan tanpa content type, creation method, connector/model eksplisit, capability match, dan ruleset snapshot;
+- generate tidak dapat dijalankan tanpa content type, creation method, connector/model eksplisit, capability match, GENERATION_READY lulus, dan persetujuan manusia atas prompt final;
+- regenerate hanya dengan perubahan prompt bermakna atau alasan penolakan tercatat;
 - hasil tidak dapat melewati audit/export gate.
 
 ### Tahap 6 — Editor SVG Ringan
@@ -241,3 +245,38 @@ Tanpa enam hal tersebut, urutan dalam dokumen ini tetap berlaku.
    #56, dan dependency #26.
 6. **Persetujuan pemilik produk:** Master Peng memberi titah 2026-09-14:
    “oke buat issue p0 sekarang, commit lalu push”.
+
+### Change request 2026-09-15 — Peran 9Router, GENERATION_READY, dan penundaan editor (#58)
+
+1. **Masalah baseline:** Tahap 5 baseline memandang 9Router sejajar fal.ai
+   sebagai generation connector, padahal keputusan produk 2026-09-15 membelah
+   peran: 9Router sebagai assistant reasoning/vision/metadata, fal.ai sebagai
+   satu-satunya image generator. Alur kreatif (brainstorming → prompt →
+   generate → vision review → metadata) belum memiliki rumah kontrak, dan
+   prompt mentah berisiko membakar kuota/credits fal.ai untuk output di bawah
+   4 MP atau melanggar stock constraints.
+2. **Perubahan:** (a) Tahap 5 memuat gerbang pra-generasi **GENERATION_READY**
+   dan persetujuan prompt manusia (one-shot first: 1 prompt → 1 job → 1
+   gambar); (b) issue baru **#58** mendirikan creative session sidecar,
+   assistant adapter 9Router (schema-validated, fail-closed), dan gate
+   deterministik tersebut; (c) “satu job 9Router end-to-end” dihitung sebagai
+   assistant job; (d) “candidate compare” #26 dipenuhi sebagai perbandingan
+   antar revision hasil regenerate, bukan batch kandidat; (e) editor SVG
+   Tahap 6 (#27) dan verifikasi edit vector (#29) berstatus **deferred** —
+   kebutuhan perbaikan digantikan regenerate-as-new-revision.
+3. **Alternatif:** (a) 9Router tetap generation connector ditolak — bertentangan
+   dengan keputusan produk dan memaksakan model reasoning untuk tugas gambar;
+   (b) menahan seluruh backend/provider Tahap 5 ditolak — kontrak non-UI dapat
+   berjalan paralel tanpa memperburuk workspace (preseden 2026-09-14);
+   (c) mencampur brainstorming/gate ke dalam #26 ditolak — mencampur kontrak
+   backend dengan UI melanggar pola vertikal repo.
+4. **Dampak:** keamanan tak berubah (credential backend-only #24, tanpa
+   routing/fallback #23, evidence fail-closed); data bertambah sidecar
+   creative session & provenance generation di luar manifest v1; UX #26
+   menjadi kelanjutan workflow terpandu #56; jadwal Tahap 6 mundur (ditunda);
+   testing bertambah gate GENERATION_READY deterministik, validasi schema
+   respons assistant, dan jalur gagalnya.
+5. **Dokumen sinkron:** `DEVELOPMENT-SEQUENCE.md`, `.github/gandiwa-dependencies.json`,
+   issue #58 (baru), komentar #24, #25, #26, #27, #29.
+6. **Persetujuan pemilik produk:** Master Peng memberi titah 2026-09-15:
+   “terapkan”.

@@ -157,7 +157,7 @@ class KanbanFlowTests(unittest.TestCase):
         dependencies = kanban_flow.load_dependencies(graph_path)
         issue_numbers = {int(issue_number) for issue_number in dependencies}
 
-        self.assertEqual(issue_numbers, {*range(2, 33), 56})
+        self.assertEqual(issue_numbers, {*range(2, 33), 56, 58})
         kanban_flow.validate_dependencies(dependencies, issue_numbers)
 
     def test_refuses_live_graphql_results_when_any_connection_is_truncated(self) -> None:
