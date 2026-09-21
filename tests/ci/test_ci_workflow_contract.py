@@ -90,7 +90,7 @@ class CiWorkflowContractTests(unittest.TestCase):
         )
         self.assertIn(
             "uv run --project apps/api alembic -c apps/api/alembic.ini current "
-            "| grep -Fxq '0002 (head)'",
+            "| grep -Fxq '0003 (head)'",
             migration_runs,
         )
         self.assertIn("GANDIWA_DATABASE_URL: sqlite:///${{ runner.temp }}/gandiwa-ci.sqlite3", migration_job)
