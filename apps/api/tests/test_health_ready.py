@@ -29,7 +29,7 @@ async def get(path: str) -> httpx.Response:
 def create_ready_database(
     path: Path,
     *,
-    revision: str = "0002",
+    revision: str = "0003",
     extra_revisions: tuple[str, ...] = (),
     include_queue: bool = True,
 ) -> None:
@@ -41,6 +41,10 @@ def create_ready_database(
         )
         if include_queue:
             connection.execute("CREATE TABLE generation_job (id TEXT PRIMARY KEY)")
+        if revision == "0003":
+            connection.execute(
+                "CREATE TABLE temporary_artifact (id TEXT PRIMARY KEY, generation_job_id TEXT)"
+            )
 
 
 def corrupt_unrelated_data_page(path: Path) -> None:

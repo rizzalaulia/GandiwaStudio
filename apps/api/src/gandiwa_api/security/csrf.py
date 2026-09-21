@@ -70,15 +70,20 @@ def sign_session_id(session_id: str, secret: str) -> str:
     return f"{session_id}.{signature}"
 
 
-def verify_session_token(token: str | None, secret: str) -> bool:
-    """Verify an opaque session cookie; session issuance belongs to a future identity flow."""
+def session_id_from_token(token: str | None, secret: str) -> str | None:
+    """Return the signed session identity, or None without exposing parse errors."""
     if not token or "." not in token:
-        return False
+        return None
     session_id, signature = token.rsplit(".", 1)
     if not session_id or not signature:
-        return False
+        return None
     expected = sign_session_id(session_id, secret).rsplit(".", 1)[1]
-    return hmac.compare_digest(signature, expected)
+    return session_id if hmac.compare_digest(signature, expected) else None
+
+
+def verify_session_token(token: str | None, secret: str) -> bool:
+    """Verify an opaque session cookie; session issuance belongs to a future identity flow."""
+    return session_id_from_token(token, secret) is not None
 
 
 def set_session_cookie(
