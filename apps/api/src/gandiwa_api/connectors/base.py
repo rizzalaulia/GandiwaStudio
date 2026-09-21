@@ -10,11 +10,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
+DEFAULT_DISPATCH_TIMEOUT_SECONDS = 300
+
 
 class ConnectorError(RuntimeError):
     """Fail-closed connector failure with a stable, redacted error code."""
 
     code = "CONNECTOR_ERROR"
+
+
+class CapabilityNotDeclaredError(ConnectorError):
+    """Job asked for a capability the frozen connector never declared."""
+
+    code = "CAPABILITY_NOT_DECLARED"
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +33,7 @@ class DispatchIdentity:
     model_id: str
     origin: str
     idempotency_key: str
+    capability: str
 
 
 @runtime_checkable
@@ -43,10 +52,16 @@ class ProviderConnector(Protocol):
 class FakeProviderServer:
     """Scripted fake provider covering Issue #23's six dispatch outcomes."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        remote_job_id: str = "fake-job-001",
+        capabilities: tuple[str, ...] = ("generate_image",),
+    ) -> None:
         self.calls: list[DispatchIdentity] = []
         self.scripted_code: str | None = None
-        self.scripted_remote_job_id = "fake-job-001"
+        self.scripted_remote_job_id = remote_job_id
+        self.capabilities = tuple(capabilities)
 
     def script(self, code: str | None) -> None:
         self.scripted_code = code

@@ -7,6 +7,7 @@ remain outside this module; handlers are explicitly injected by the worker.
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -14,6 +15,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import Engine, text
+
+from gandiwa_api.connectors.base import DEFAULT_DISPATCH_TIMEOUT_SECONDS
 
 QUEUE_STATES = {
     "queued",
@@ -89,6 +92,8 @@ class JobExecution:
     mark_dispatched: Callable[[str | None], QueueJob]
     heartbeat: Callable[[], QueueJob]
     cancellation_requested: Callable[[], bool]
+    timeout_seconds: int
+    deadline_frozen: float
 
     @property
     def id(self) -> str:
@@ -413,6 +418,8 @@ class QueueStore:
                 lease_seconds=30,
             ),
             cancellation_requested=lambda: self.cancellation_requested(job_id),
+            timeout_seconds=DEFAULT_DISPATCH_TIMEOUT_SECONDS,
+            deadline_frozen=time.monotonic() + DEFAULT_DISPATCH_TIMEOUT_SECONDS,
         )
         try:
             result = handler(execution)

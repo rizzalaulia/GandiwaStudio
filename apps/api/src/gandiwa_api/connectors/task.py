@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from sqlalchemy import text
 
-from gandiwa_api.connectors.base import ConnectorError, DispatchIdentity
+from gandiwa_api.connectors.base import (
+    DEFAULT_DISPATCH_TIMEOUT_SECONDS,
+    ConnectorError,
+    DispatchIdentity,
+)
 from gandiwa_api.connectors.registry import ConnectorRegistry
 from gandiwa_api.queue import JobExecution, QueueStore
 
@@ -19,6 +24,7 @@ def run_connector_dispatch(
     *,
     lease_seconds: int = 30,
     mark_dispatched_remote_job_id: str | None = None,
+    dispatch_timeout_seconds: int = DEFAULT_DISPATCH_TIMEOUT_SECONDS,
 ) -> Any:
     """Resolve one connector from the job's frozen identity and run it once."""
     job = queue.get(job_id)
@@ -37,11 +43,17 @@ def run_connector_dispatch(
     except LookupError:
         return queue._needs_review(job_id, worker_id, "UNKNOWN_DISPATCH")
 
+    capability = parameters.get("capability") or "generate_image"
+    declared: tuple[str, ...] = tuple(getattr(connector, "capabilities", ()))
+    if capability not in declared:
+        return queue._needs_review(job_id, worker_id, "CAPABILITY_NOT_DECLARED")
+
     identity = DispatchIdentity(
         provider_id=job.provider_id,
         model_id=job.model_id,
         origin=origin,
         idempotency_key=idempotency_key,
+        capability=capability,
     )
 
     def mark_dispatched_closure(
@@ -54,6 +66,7 @@ def run_connector_dispatch(
         )
 
     mark_dispatched = mark_dispatched_closure
+    deadline_frozen = time.monotonic() + dispatch_timeout_seconds
     execution = JobExecution(
         job=job,
         mark_dispatched=mark_dispatched,
@@ -63,6 +76,8 @@ def run_connector_dispatch(
             lease_seconds=lease_seconds,
         ),
         cancellation_requested=lambda: queue.cancellation_requested(job_id),
+        timeout_seconds=dispatch_timeout_seconds,
+        deadline_frozen=deadline_frozen,
     )
 
     try:
