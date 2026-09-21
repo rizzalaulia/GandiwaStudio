@@ -5,15 +5,13 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from sqlalchemy import text
-
 from gandiwa_api.connectors.base import (
     DEFAULT_DISPATCH_TIMEOUT_SECONDS,
     ConnectorError,
     DispatchIdentity,
 )
 from gandiwa_api.connectors.registry import ConnectorRegistry
-from gandiwa_api.queue import JobExecution, QueueStore
+from gandiwa_api.queue import JobExecution, QueueError, QueueStore
 
 
 def run_connector_dispatch(
@@ -26,8 +24,18 @@ def run_connector_dispatch(
     mark_dispatched_remote_job_id: str | None = None,
     dispatch_timeout_seconds: int = DEFAULT_DISPATCH_TIMEOUT_SECONDS,
 ) -> Any:
-    """Resolve one connector from the job's frozen identity and run it once."""
+    """Resolve one connector from the job's frozen identity and run it once.
+
+    Caller contract: termination returns (final job record); the queue owns all
+    state transitions. One QueueError propagates unchanged to the caller only
+    when the worker lost its lease before the durable dispatch boundary
+    (status ``running``, no cancel flag): the job stays claimable and recovery
+    belongs to the queue's expired-lease reaper (``recover_expired``), never to
+    this bridge. Callers must not treat it as a dispatch failure.
+    """
     job = queue.get(job_id)
+    if queue.cancellation_requested(job_id):
+        return queue.transition(job_id, worker_id, "cancelled")
     parameters = job.parameters
     origin = parameters.get("origin")
     idempotency_key = parameters.get("idempotency_key")
@@ -82,8 +90,21 @@ def run_connector_dispatch(
 
     try:
         result = connector.dispatch(identity, execution)
+    except QueueError:
+        claimed = queue.get(job_id)
+        if claimed.status != "waiting_provider" and claimed.cancel_requested_at is not None:
+            return queue.transition(job_id, worker_id, "cancelled")
+        if claimed.status == "waiting_provider":
+            return queue._needs_review(job_id, worker_id, "UNKNOWN_PROVIDER_OUTCOME")
+        raise
     except ConnectorError as error:
         claimed = queue.get(job_id)
+        if (
+            error.code == "CANCELLED"
+            and claimed.status != "waiting_provider"
+            and claimed.cancel_requested_at is not None
+        ):
+            return queue.transition(job_id, worker_id, "cancelled")
         if claimed.status != "waiting_provider":
             return queue._fail(job_id, worker_id, error.code)
         return queue._needs_review(job_id, worker_id, "UNKNOWN_PROVIDER_OUTCOME")
@@ -102,14 +123,12 @@ def run_connector_dispatch(
     if remote_job_id is None:
         return queue._fail(job_id, worker_id, "INVALID_RESPONSE")
 
-    finalized = queue.finalize_success(job_id, worker_id, result)
+    finalized = queue.finalize_success(
+        job_id,
+        worker_id,
+        result,
+        remote_job_id=remote_job_id,
+    )
     if remote_job_id and finalized.remote_job_id != remote_job_id:
-        with queue.engine.begin() as connection:
-            connection.execute(
-                text(
-                    "UPDATE generation_job SET remote_job_id = :remote "
-                    "WHERE id = :id AND lease_owner = :owner AND status = 'succeeded'"
-                ),
-                {"remote": remote_job_id, "id": job_id, "owner": worker_id},
-            )
+        raise QueueError("remote job id was not persisted atomically")
     return queue.get(job_id)

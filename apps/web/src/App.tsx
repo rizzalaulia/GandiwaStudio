@@ -15,6 +15,13 @@ import { evaluateApprovalGate, type ApprovalGateResult, type DurableAuditSnapsho
 import type { AuditDirectory } from './durable-audit-store'
 import { resolveExportPackageCandidate, writeExportPackage, type ExportPackageCandidate } from './export-package'
 import { getGuidedWorkflowPresentation, type GuidedWorkflowInput } from './workflow/guided-workflow'
+import {
+  clearSelectedInstance,
+  fetchProviderOptions,
+  persistSelectedInstance,
+  resolveSelectedInstance,
+  type ProviderOption,
+} from './assistant/router-selection'
 import { GuidedWorkflowShell } from './components/workflow/GuidedWorkflowShell'
 
 const AUDIT_RULESET_ID = 'adobe-stock-2026-09-08-v1'
@@ -241,6 +248,9 @@ function projectMessage(result: ProjectCreationResult): string {
 export function App() {
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [routerInstances, setRouterInstances] = useState<ProviderOption[] | null>(null)
+  const [routerInstance, setRouterInstance] = useState<string | null>(null)
+  const [routerMessage, setRouterMessage] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [isCreateDialogOpen, setCreateDialogOpen] = useState(false)
   const [createForm, setCreateForm] = useState<CreateProjectForm>(DEFAULT_CREATE_PROJECT_FORM)
@@ -308,6 +318,21 @@ export function App() {
     } finally {
       if (requestId === requestSequence.current) setLoading(false)
     }
+  }, [])
+
+  // Instance options are fetched once on mount; the selection itself is human-owned.
+  const routerSequence = useRef(0)
+  useEffect(() => {
+    const requestId = ++routerSequence.current
+    fetchProviderOptions()
+      .then((instances) => {
+        // Only the human's explicit stored choice is restored; never auto-pick.
+        setRouterInstances(instances)
+        setRouterInstance(resolveSelectedInstance(instances))
+      })
+      .catch(() => {
+        if (requestId === routerSequence.current) setRouterInstances(null)
+      })
   }, [])
 
   useEffect(() => {
@@ -886,6 +911,50 @@ export function App() {
     blockers: approvalGate.reasons,
   }
   const workflowPresentation = getGuidedWorkflowPresentation(guidedWorkflowInput)
+  const assistantRouterPicker = (
+    <section className="guided-secondary-tools" aria-label="Assistant router selection">
+      <p className="guided-kicker">ASSISTANT ROUTER</p>
+      <p className="helper">
+        Choose which 9Router instance handles assistant prompts before starting one. Gandiwa never
+        picks automatically and never falls back between instances.
+      </p>
+      {routerInstances === null ? (
+        <p className="helper">9Router instances are still loading.</p>
+      ) : routerInstances.length === 0 ? (
+        <p className="helper">No 9Router instance is configured on the backend.</p>
+      ) : (
+        <>
+          <label htmlFor="assistant-router-instance">9Router instance</label>
+          <select
+            id="assistant-router-instance"
+            value={routerInstance ?? ''}
+            onChange={(event) => {
+              const chosen = event.target.value
+              if (!chosen) {
+                clearSelectedInstance()
+                setRouterInstance(null)
+                setRouterMessage('Assistant prompts stay blocked until you choose one.')
+                return
+              }
+              persistSelectedInstance(chosen)
+              setRouterInstance(chosen)
+              setRouterMessage(null)
+            }}
+          >
+            <option value="">Choose an instance…</option>
+            {routerInstances.map((instance) => (
+              <option key={instance.id} value={instance.id}>{instance.name}</option>
+            ))}
+          </select>
+          {routerInstance === null ? (
+            <p className="helper" data-testid="assistant-router-blocked">Select a 9Router instance before starting a prompt.</p>
+          ) : null}
+          {routerMessage ? <p className="helper" role="alert">{routerMessage}</p> : null}
+        </>
+      )}
+    </section>
+  )
+
   const preflightTools = (
     <details className="guided-secondary-tools">
       <summary>Inspect a candidate temporarily</summary>
@@ -917,6 +986,7 @@ export function App() {
       <input className="guided-visually-hidden" id="raster-preparation-file" type="file" accept="image/jpeg,image/png,.jpeg,.jpg,.png" disabled={isPreparingRaster} onChange={(event) => void handleRasterPreparation(event)} />
       {isPreparingRaster ? <p className="project-result" role="status">Preparing JPEG submission revision…</p> : null}
       {preparationMessage ? <p className="project-result" role="status">{preparationMessage}</p> : null}
+      {assistantRouterPicker}
       {preflightTools}
     </section>
   )
@@ -1068,6 +1138,8 @@ export function App() {
         )}
 
         {creationMessage ? <p className="project-result" role="status">{creationMessage}</p> : null}
+
+        {activeProject ? null : assistantRouterPicker}
 
         {activeProject ? null : (
         <>

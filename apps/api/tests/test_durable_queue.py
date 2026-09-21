@@ -278,6 +278,23 @@ def test_cancellation_during_handler_blocks_success(store: QueueStore) -> None:
     assert result.result_manifest is None
 
 
+def test_finalize_success_atomically_persists_remote_job_id(store: QueueStore) -> None:
+    job_id = store.enqueue(job_type="generate")
+    store.claim_next("worker-a", lease_seconds=30)
+    store.mark_dispatched(job_id, "worker-a")
+
+    final = store.finalize_success(
+        job_id,
+        "worker-a",
+        {"artifact": "opaque-id"},
+        remote_job_id="provider-job-123",
+    )
+
+    assert final.status == "succeeded"
+    assert final.remote_job_id == "provider-job-123"
+    assert final.result_manifest == {"artifact": "opaque-id"}
+
+
 def test_handler_success_and_handler_failure_are_persisted(store: QueueStore) -> None:
     success_id = store.enqueue(job_type="generate")
     store.claim_next("worker-a", lease_seconds=30)
