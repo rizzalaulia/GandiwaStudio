@@ -120,8 +120,11 @@ QUEUED → RUNNING → WAITING_PROVIDER → PROCESSING → SUCCEEDED
 - Claim order: priority lalu FIFO.
 - Lease + heartbeat mendeteksi worker mati.
 - Recovery tidak boleh mendispatch ulang generation request jika outcome provider belum diketahui.
-- Retry hanya untuk operasi aman/idempotent.
-- Cancel bersifat cooperative dan diteruskan ke provider jika tersedia.
+- Handler wajib mempersistenkan boundary `waiting_provider` sebelum provider I/O; lease basi sesudah boundary masuk `needs_review`.
+- Retry default nol dan hanya aktif per `job_type` untuk error yang dinyatakan aman/idempotent.
+- Worker menjaga lease job selama handler berjalan; finalisasi hasil ditolak bila lease hilang atau cancel sudah diminta.
+- Cancel bersifat cooperative melalui execution context dan diteruskan ke provider jika connector mendukungnya.
+- Registry handler produksi tetap eksplisit dan fail-closed; connector #23–#25 yang mendaftarkan handler provider nyata.
 - REST polling digunakan pada MVP; SSE/WebSocket ditunda.
 
 ## Deployment Boundary
