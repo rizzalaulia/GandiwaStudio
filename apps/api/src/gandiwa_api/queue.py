@@ -458,6 +458,35 @@ class QueueStore:
                 raise QueueError("cannot finalize without an active uncancelled lease")
         return self.get(job_id)
 
+    def finalize_success(
+        self,
+        job_id: str,
+        worker_id: str,
+        result: dict[str, Any] | None,
+    ) -> QueueJob:
+        """Same CAS contract as dispatch_once's success path; safe for callers."""
+        current = self.get(job_id)
+        if current.cancel_requested_at is not None:
+            return self.transition(job_id, worker_id, "cancelled")
+        with self.engine.begin() as connection:
+            finalized = connection.execute(
+                text(
+                    "UPDATE generation_job SET status = 'succeeded', result_manifest = :result, "
+                    "completed_at = :completed WHERE id = :id AND lease_owner = :owner "
+                    "AND status IN ('running', 'waiting_provider', 'processing') "
+                    "AND cancel_requested_at IS NULL AND lease_expires_at >= :completed"
+                ),
+                {
+                    "result": json.dumps(result or {}),
+                    "completed": _dbtime(_utcnow()),
+                    "id": job_id,
+                    "owner": worker_id,
+                },
+            )
+            if finalized.rowcount != 1:
+                raise QueueError("cannot finalize without an active uncancelled lease")
+        return self.get(job_id)
+
     def _requeue(self, job_id: str, worker_id: str) -> QueueJob:
         with self.engine.begin() as connection:
             result = connection.execute(
