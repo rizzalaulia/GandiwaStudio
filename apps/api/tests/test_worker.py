@@ -15,6 +15,7 @@ from alembic.config import Config
 
 from gandiwa_api.config import Settings
 from gandiwa_api.database import create_sqlite_engine
+from gandiwa_api.queue import QueueStore
 from gandiwa_api.worker import Worker
 
 
@@ -78,6 +79,76 @@ def test_worker_concurrency_is_fixed_to_one(settings: Settings) -> None:
     worker = Worker(settings)
 
     assert worker.concurrency == 1
+
+
+def test_worker_run_once_claims_and_dispatches_one_job(settings: Settings) -> None:
+    from alembic import command as alembic_command
+
+    alembic_command.upgrade(_alembic_config(settings.DATABASE_URL), "head")
+    engine = create_sqlite_engine(settings)
+    store = QueueStore(engine)
+    first = store.enqueue(job_type="generate", priority=10)
+    second = store.enqueue(job_type="generate", priority=1)
+    worker = Worker(
+        settings,
+        handlers={"generate": lambda job: {"job_id": job.id}},
+        worker_id="worker-test",
+    )
+
+    try:
+        assert worker.run_once() is True
+        assert store.get(first).status == "succeeded"
+        assert store.get(second).status == "queued"
+        assert worker.run_once() is True
+        assert store.get(second).status == "succeeded"
+        assert worker.run_once() is False
+    finally:
+        engine.dispose()
+
+
+def test_worker_renews_job_lease_during_long_handler(settings: Settings) -> None:
+    from alembic import command as alembic_command
+
+    alembic_command.upgrade(_alembic_config(settings.DATABASE_URL), "head")
+    engine = create_sqlite_engine(settings)
+    store = QueueStore(engine)
+    job_id = store.enqueue(job_type="slow")
+
+    def slow_handler(_execution: object) -> dict[str, bool]:
+        time.sleep(1.4)
+        return {"completed": True}
+
+    worker = Worker(
+        settings,
+        handlers={"slow": slow_handler},
+        worker_id="worker-test",
+        lease_seconds=1,
+    )
+    try:
+        assert worker.run_once() is True
+        assert store.get(job_id).status == "succeeded"
+    finally:
+        engine.dispose()
+
+
+def test_worker_run_once_fails_unknown_dispatch_without_retry(settings: Settings) -> None:
+    from alembic import command as alembic_command
+
+    alembic_command.upgrade(_alembic_config(settings.DATABASE_URL), "head")
+    engine = create_sqlite_engine(settings)
+    store = QueueStore(engine)
+    job_id = store.enqueue(job_type="unknown")
+    worker = Worker(settings, handlers={}, worker_id="worker-test")
+
+    try:
+        assert worker.run_once() is True
+        failed = store.get(job_id)
+        assert failed.status == "needs_review"
+        assert failed.error_code == "UNKNOWN_DISPATCH"
+        assert failed.attempt_count == 1
+        assert worker.run_once() is False
+    finally:
+        engine.dispose()
 
 
 def test_worker_does_not_bind_to_any_port(settings: Settings) -> None:
