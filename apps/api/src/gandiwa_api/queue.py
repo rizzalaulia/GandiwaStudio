@@ -7,6 +7,7 @@ remain outside this module; handlers are explicitly injected by the worker.
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -14,6 +15,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import Engine, text
+
+from gandiwa_api.connectors.base import DEFAULT_DISPATCH_TIMEOUT_SECONDS
 
 QUEUE_STATES = {
     "queued",
@@ -89,6 +92,8 @@ class JobExecution:
     mark_dispatched: Callable[[str | None], QueueJob]
     heartbeat: Callable[[], QueueJob]
     cancellation_requested: Callable[[], bool]
+    timeout_seconds: int
+    deadline_frozen: float
 
     @property
     def id(self) -> str:
@@ -413,6 +418,8 @@ class QueueStore:
                 lease_seconds=30,
             ),
             cancellation_requested=lambda: self.cancellation_requested(job_id),
+            timeout_seconds=DEFAULT_DISPATCH_TIMEOUT_SECONDS,
+            deadline_frozen=time.monotonic() + DEFAULT_DISPATCH_TIMEOUT_SECONDS,
         )
         try:
             result = handler(execution)
@@ -436,6 +443,35 @@ class QueueStore:
                     "UNKNOWN_PROVIDER_OUTCOME",
                 )
             return self._fail(job_id, worker_id, "HANDLER_ERROR")
+        current = self.get(job_id)
+        if current.cancel_requested_at is not None:
+            return self.transition(job_id, worker_id, "cancelled")
+        with self.engine.begin() as connection:
+            finalized = connection.execute(
+                text(
+                    "UPDATE generation_job SET status = 'succeeded', result_manifest = :result, "
+                    "completed_at = :completed WHERE id = :id AND lease_owner = :owner "
+                    "AND status IN ('running', 'waiting_provider', 'processing') "
+                    "AND cancel_requested_at IS NULL AND lease_expires_at >= :completed"
+                ),
+                {
+                    "result": json.dumps(result or {}),
+                    "completed": _dbtime(_utcnow()),
+                    "id": job_id,
+                    "owner": worker_id,
+                },
+            )
+            if finalized.rowcount != 1:
+                raise QueueError("cannot finalize without an active uncancelled lease")
+        return self.get(job_id)
+
+    def finalize_success(
+        self,
+        job_id: str,
+        worker_id: str,
+        result: dict[str, Any] | None,
+    ) -> QueueJob:
+        """Same CAS contract as dispatch_once's success path; safe for callers."""
         current = self.get(job_id)
         if current.cancel_requested_at is not None:
             return self.transition(job_id, worker_id, "cancelled")
