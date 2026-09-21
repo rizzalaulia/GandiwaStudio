@@ -16,7 +16,9 @@ from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 
+from gandiwa_api.artifact_store import AccessDenied, ArtifactStore, ExpiredArtifact
 from gandiwa_api.config import Settings
+from gandiwa_api.database import create_sqlite_engine
 from gandiwa_api.raster_preflight import DEFAULT_LIMITS as RASTER_PREFLIGHT_LIMITS
 from gandiwa_api.raster_preflight import inspect_raster
 from gandiwa_api.security.artifacts import build_artifact_download_response
@@ -24,8 +26,8 @@ from gandiwa_api.security.csrf import (
     SESSION_COOKIE_NAME,
     CSRFProtectionMiddleware,
     generate_csrf_token,
+    session_id_from_token,
     set_csrf_cookie,
-    verify_session_token,
 )
 from gandiwa_api.security.providers import ProviderInfo, get_configured_providers
 from gandiwa_api.svg_preflight import DEFAULT_LIMITS as SVG_PREFLIGHT_LIMITS
@@ -39,7 +41,7 @@ except PackageNotFoundError:  # pragma: no cover - editable and wheel installs p
 
 # Application-owned contract: Issue #4 must make the Alembic head match this value.
 # Never move this value to environment configuration, which could approve a stale schema.
-EXPECTED_SCHEMA_REVISION = "0002"
+EXPECTED_SCHEMA_REVISION = "0003"
 MVP_VERSION = "mvp-1.0"
 SQLITE_URL_PREFIX = "sqlite:///"
 
@@ -355,19 +357,42 @@ def get_svg_preflight_preview(token: str) -> Response:
     )
 
 
-@app.get("/api/v1/artifacts/{filename}/download")
-def download_artifact(filename: str, request: Request) -> FileResponse:
-    """Download an artifact only for an authenticated session, always as an attachment.
-
-    Identity/session issuance is deliberately outside Issue #7. Until that MVP decision is
-    implemented, requests without a server-signed HttpOnly session fail closed with 401.
-    """
+@app.get("/api/v1/artifacts/{artifact_id}/download")
+def download_artifact(artifact_id: str, request: Request) -> FileResponse:
+    """Retrieve a durable temporary artifact only for its signed-session owner."""
     current_settings = Settings()
-    if not verify_session_token(
-        request.cookies.get(SESSION_COOKIE_NAME), current_settings.SESSION_SECRET
-    ):
+    session_id = session_id_from_token(
+        request.cookies.get(SESSION_COOKIE_NAME),
+        current_settings.SESSION_SECRET,
+    )
+    if session_id is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required",
         )
-    return build_artifact_download_response(filename, current_settings.ARTIFACT_DIR)
+    store = ArtifactStore(
+        create_sqlite_engine(current_settings),
+        current_settings.ARTIFACT_DIR,
+    )
+    try:
+        artifact = store.claim_retrieval(
+            artifact_id,
+            session_id,
+            lease_seconds=60,
+        )
+    except (AccessDenied, ExpiredArtifact):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Artifact not found",
+        ) from None
+    file_path = store.private_path(artifact)
+    if not store.verify_integrity(artifact):
+        store.complete_retrieval(artifact.id, session_id)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found")
+    return build_artifact_download_response(
+        file_path,
+        download_name=artifact.download_name,
+        media_type=artifact.media_type,
+        sha256=artifact.sha256,
+        on_complete=lambda: store.complete_retrieval(artifact.id, session_id),
+    )
