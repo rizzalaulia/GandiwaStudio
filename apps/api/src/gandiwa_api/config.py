@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import os
+import re
 from pathlib import Path
 from typing import Annotated, Any
 
-from pydantic import AliasChoices, Field, field_validator, model_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 DEVELOPMENT_SESSION_SECRET = "change-me-for-local-development"
@@ -52,6 +54,19 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("NINEROUTER_API_KEY", "GANDIWA_NINEROUTER_API_KEY"),
     )
+    NINEROUTER_INSTANCES: Annotated[dict[str, str], NoDecode] | None = Field(
+        default=None,
+        validation_alias=AliasChoices("NINEROUTER_INSTANCES", "GANDIWA_NINEROUTER_INSTANCES"),
+    )
+    NINEROUTER_API_KEY_INSTANCE: dict[str, SecretStr] = Field(
+        default_factory=dict,
+        exclude=True,
+        validation_alias=AliasChoices(
+            "NINEROUTER_API_KEY_INSTANCE",
+            "GANDIWA_NINEROUTER_API_KEY_INSTANCE",
+        ),
+    )
+
     FAL_BASE_URL: str = Field(
         default="https://queue.fal.run",
         validation_alias=AliasChoices("FAL_BASE_URL", "GANDIWA_FAL_BASE_URL"),
@@ -73,6 +88,83 @@ class Settings(BaseSettings):
         if not parsed or "*" in parsed:
             raise ValueError("ALLOWED_ORIGINS must contain explicit origins and cannot contain '*'")
         return parsed
+
+    @field_validator("NINEROUTER_INSTANCES", mode="before")
+    @classmethod
+    def parse_ninerouter_instances(cls, spec: Any) -> dict[str, str] | None:
+        """Parse ``name=URL`` entries separated by ``;`` or newlines into a mapping."""
+        if spec is None or spec == "":
+            return None
+        if isinstance(spec, dict) and all(
+            isinstance(key, str) and isinstance(value, str) for key, value in spec.items()
+        ):
+            parsed = dict(spec)
+        elif isinstance(spec, str):
+            parsed = {}
+            for entry in spec.replace("\n", ";").split(";"):
+                entry = entry.strip()
+                if not entry:
+                    continue
+                if "=" not in entry:
+                    raise ValueError(
+                        "NINEROUTER_INSTANCES must be 'name=URL' entries separated by ';'"
+                    )
+                name, url = entry.split("=", 1)
+                name = name.strip().lower()
+                url = url.strip()
+                if not name or not url:
+                    raise ValueError(
+                        "NINEROUTER_INSTANCES must be 'name=URL' entries separated by ';'"
+                    )
+                parsed[name] = url
+        else:
+            raise ValueError(
+                "NINEROUTER_INSTANCES must be a 'name=URL;…' string or a string mapping"
+            )
+        if not parsed:
+            raise ValueError("NINEROUTER_INSTANCES must name at least one 'name=URL' entry")
+        return parsed
+
+    @model_validator(mode="after")
+    def validate_ninerouter_instances(self) -> Settings:
+        keys = dict(self.NINEROUTER_API_KEY_INSTANCE)
+        # Sub-env per instance: GANDIWA_NINEROUTER_API_KEY_<NAME> (server-side only).
+        for key, value in os.environ.items():
+            if not key.startswith("GANDIWA_NINEROUTER_API_KEY_"):
+                continue
+            name = key[len("GANDIWA_NINEROUTER_API_KEY_"):]
+            if name and re.fullmatch(r"[A-Z0-9]+(_[A-Z0-9]+)*", name):
+                keys.setdefault(name, SecretStr(value))
+        if self.NINEROUTER_INSTANCES is None:
+            if keys:
+                raise ValueError("NINEROUTER_API_KEY given without any NINEROUTER_INSTANCES")
+            self.NINEROUTER_API_KEY_INSTANCE = {}
+            return self
+        known = {name.upper() for name in self.NINEROUTER_INSTANCES}
+        for name in keys:
+            env_form = name.upper()
+            if env_form not in known and env_form.replace("_", "-") not in known:
+                raise ValueError(f"NINEROUTER_API_KEY names an unknown instance: {name}")
+        self.NINEROUTER_API_KEY_INSTANCE = {
+            name: value if isinstance(value, SecretStr) else SecretStr(value)
+            for name, value in keys.items()
+        }
+        return self
+
+    def _instances_map(self) -> dict[str, str]:
+        return self.NINEROUTER_INSTANCES or {}
+
+    def ninerouter_instance_origins(self) -> dict[str, str]:
+        """Named instance id to base URL mapping; server-side configuration only."""
+        return dict(self._instances_map())
+
+    def ninerouter_instance_api_key(self, instance_id: str) -> str | None:
+        """Raw API key for one named instance; server-side transport use only."""
+        key = instance_id.strip().upper()
+        direct = self.NINEROUTER_API_KEY_INSTANCE.get(key)
+        if direct is None:
+            direct = self.NINEROUTER_API_KEY_INSTANCE.get(key.replace("-", "_"))
+        return direct.get_secret_value() if direct is not None else None
 
     @model_validator(mode="after")
     def validate_security_settings(self) -> Settings:

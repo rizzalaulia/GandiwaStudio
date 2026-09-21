@@ -142,7 +142,7 @@ def _valid_view_box(value: str | None) -> tuple[float, float, float, float] | No
         return None
     if parsed[2] <= 0 or parsed[3] <= 0:
         return None
-    return parsed  # type: ignore[return-value]
+    return parsed
 
 
 def _exceeds_depth_limit(nodes: tuple[etree._Element, ...], *, max_depth: int) -> bool:

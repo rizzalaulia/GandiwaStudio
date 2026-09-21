@@ -470,6 +470,8 @@ class QueueStore:
         job_id: str,
         worker_id: str,
         result: dict[str, Any] | None,
+        *,
+        remote_job_id: str | None = None,
     ) -> QueueJob:
         """Same CAS contract as dispatch_once's success path; safe for callers."""
         current = self.get(job_id)
@@ -479,12 +481,14 @@ class QueueStore:
             finalized = connection.execute(
                 text(
                     "UPDATE generation_job SET status = 'succeeded', result_manifest = :result, "
+                    "remote_job_id = COALESCE(:remote_job_id, remote_job_id), "
                     "completed_at = :completed WHERE id = :id AND lease_owner = :owner "
                     "AND status IN ('running', 'waiting_provider', 'processing') "
                     "AND cancel_requested_at IS NULL AND lease_expires_at >= :completed"
                 ),
                 {
                     "result": json.dumps(result or {}),
+                    "remote_job_id": remote_job_id,
                     "completed": _dbtime(_utcnow()),
                     "id": job_id,
                     "owner": worker_id,

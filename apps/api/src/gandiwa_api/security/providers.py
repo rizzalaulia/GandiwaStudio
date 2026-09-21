@@ -21,35 +21,45 @@ class ProviderInfo(BaseModel):
     auth_required: bool
 
 
+def _fal_configured(settings: Settings) -> bool:
+    if not settings.FAL_KEY:
+        return False
+    try:
+        validate_fal_base_url(settings.FAL_BASE_URL)
+    except SSRFValidationError:
+        return False
+    return True
+
+
 def get_configured_providers(settings: Settings) -> list[ProviderInfo]:
-    """Expose only the two MVP backend-configured connectors, fail-closed on bad targets."""
-    fal_configured = False
-    if settings.FAL_KEY:
-        try:
-            validate_fal_base_url(settings.FAL_BASE_URL)
-            fal_configured = True
-        except SSRFValidationError:
-            fal_configured = False
+    """Expose each MVP backend-configured connector; fail-closed on bad targets.
 
-    ninerouter_configured = False
-    if settings.NINEROUTER_BASE_URL and settings.NINEROUTER_API_KEY:
-        try:
-            validate_9router_base_url(settings.NINEROUTER_BASE_URL)
-            ninerouter_configured = True
-        except SSRFValidationError:
-            ninerouter_configured = False
-
-    return [
+    Every named 9Router instance is listed separately by its instance id. The
+    response never contains a base URL or API key — only a ``configured``
+    boolean per instance.
+    """
+    providers = [
         ProviderInfo(
             id="fal",
             name="fal.ai",
-            configured=fal_configured,
-            auth_required=True,
-        ),
-        ProviderInfo(
-            id="9router",
-            name="9Router",
-            configured=ninerouter_configured,
+            configured=_fal_configured(settings),
             auth_required=True,
         ),
     ]
+    for instance_id, origin in settings.ninerouter_instance_origins().items():
+        configured = False
+        if settings.ninerouter_instance_api_key(instance_id):
+            try:
+                validate_9router_base_url(origin)
+                configured = True
+            except SSRFValidationError:
+                configured = False
+        providers.append(
+            ProviderInfo(
+                id=instance_id,
+                name=f"9Router · {instance_id}",
+                configured=configured,
+                auth_required=True,
+            )
+        )
+    return providers

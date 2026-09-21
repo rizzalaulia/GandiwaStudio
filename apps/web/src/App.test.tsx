@@ -15,6 +15,11 @@ vi.mock('./project-handle-store', () => ({
 
 import { App, isCurrentExport, isCurrentPreflight, isCurrentProjectPreflight, isSameApprovalEvidence } from './App'
 
+const PROVIDERS_RESPONSE = {
+  ok: true,
+  json: () => Promise.resolve([]),
+}
+
 describe('App shell', () => {
   it('rejects a preflight response that predates a metadata-save invalidation', () => {
     const preflightRequest = 1
@@ -246,6 +251,7 @@ describe('App shell', () => {
     vi.stubGlobal('showDirectoryPicker', vi.fn(() => Promise.resolve(directory)))
     vi.stubGlobal('fetch', vi
       .fn()
+      .mockResolvedValueOnce(PROVIDERS_RESPONSE)
       .mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve({
@@ -301,6 +307,7 @@ describe('App shell', () => {
     vi.stubGlobal('showDirectoryPicker', vi.fn(() => Promise.resolve(directory)))
     vi.stubGlobal('fetch', vi
       .fn()
+      .mockResolvedValueOnce(PROVIDERS_RESPONSE)
       .mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve({
@@ -353,6 +360,7 @@ describe('App shell', () => {
     }
     vi.stubGlobal('showDirectoryPicker', vi.fn(() => Promise.resolve(directory)))
     vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(PROVIDERS_RESPONSE)
       .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ version: '0.0.0', mvp_version: 'mvp-1.0', backend: { health: 'ok', ready: true, checks: {} }, worker: { status: 'idle', heartbeat_at: null } }) })
       .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ csrf_token: 'csrf-token' }) })
       .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ verdict: 'fail', eligible_for_submission: false, findings: [{ rule_id: 'vector.no-raster', message: 'Raster image detected.' }], preview_url: null }) }))
@@ -585,7 +593,11 @@ describe('App shell', () => {
         worker: { status: 'stopped', heartbeat_at: null },
       }),
     } as Response)
-    vi.stubGlobal('fetch', vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second))
+    // Call order: mount providers fetch, initial status (pending), then refresh status.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockReturnValueOnce(PROVIDERS_RESPONSE).mockReturnValueOnce(first).mockReturnValueOnce(second),
+    )
 
     render(<App />)
     fireEvent.click(screen.getByRole('button', { name: 'Refresh status' }))
@@ -611,8 +623,10 @@ describe('App shell', () => {
   })
 
   it('clears stale runtime state when a refresh loses the backend', async () => {
+    // Call order: mount providers fetch, initial status, then the refresh status.
     const fetchMock = vi
       .fn()
+      .mockResolvedValueOnce(PROVIDERS_RESPONSE)
       .mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve({
