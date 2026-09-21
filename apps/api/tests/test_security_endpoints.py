@@ -103,6 +103,7 @@ async def test_artifact_record_download_requires_matching_owner_and_is_safe(
         payload=b"<svg></svg>",
         ttl_seconds=300,
     )
+    store.engine.dispose()  # durable proof: staging engine dies before retrieval
     monkeypatch.setenv("GANDIWA_DATABASE_URL", database_url)
     monkeypatch.setenv("GANDIWA_ARTIFACT_DIR", str(artifacts_dir))
 
