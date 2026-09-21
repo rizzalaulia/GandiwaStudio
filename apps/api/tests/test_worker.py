@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 import pytest
 from alembic.config import Config
+from pydantic import SecretStr
 
 from gandiwa_api.config import Settings
 from gandiwa_api.database import create_sqlite_engine
@@ -36,6 +37,28 @@ def _alembic_config(database_url: str) -> Config:
     config.set_main_option("script_location", str(api_root / "migrations"))
     config.set_main_option("sqlalchemy.url", database_url)
     return config
+
+
+def test_production_worker_registers_fal_generate_handler_without_exposing_key(
+    settings: Settings,
+) -> None:
+    from gandiwa_api.worker import build_production_worker
+
+    configured = Settings(
+        DATABASE_URL=settings.DATABASE_URL,
+        ARTIFACT_DIR=settings.ARTIFACT_DIR,
+        FAL_BASE_URL="https://queue.fal.run",
+        **{"FAL_KEY": SecretStr("synthetic-worker-token")},
+    )
+    worker = build_production_worker(
+        configured,
+        origin_validator=lambda _url: ("queue.fal.run", 443, [object()]),
+    )
+
+    assert worker._connector_job_types == frozenset({"generate"})
+    assert worker._connector_registry is not None
+    assert worker._connector_registry.registered_providers == ("fal",)
+    assert "synthetic-worker-token" not in repr(worker.__dict__)
 
 
 def test_worker_starts_and_reports_idle_status(settings: Settings) -> None:

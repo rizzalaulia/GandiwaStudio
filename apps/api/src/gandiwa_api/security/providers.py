@@ -22,7 +22,7 @@ class ProviderInfo(BaseModel):
 
 
 def _fal_configured(settings: Settings) -> bool:
-    if not settings.FAL_KEY:
+    if not settings.fal_api_key():
         return False
     try:
         validate_fal_base_url(settings.FAL_BASE_URL)

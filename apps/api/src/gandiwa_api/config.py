@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     DATABASE_BUSY_TIMEOUT_MS: int = 5_000
     WORKER_HEARTBEAT_STALE_SECONDS: int = 5
     ARTIFACT_DIR: Path = Path("./var/artifacts")
+    ARTIFACT_RETENTION_HOURS: int = 24
+    MAX_ARTIFACT_BYTES: int = 100 * 1024 * 1024
     SVG_QUARANTINE_DIR: Path = Path("./var/svg-quarantine").resolve()
     SVG_QUARANTINE_TTL_SECONDS: int = 3_600
     SESSION_SECRET: str = Field(
@@ -71,8 +73,9 @@ class Settings(BaseSettings):
         default="https://queue.fal.run",
         validation_alias=AliasChoices("FAL_BASE_URL", "GANDIWA_FAL_BASE_URL"),
     )
-    FAL_KEY: str | None = Field(
+    FAL_KEY: SecretStr | None = Field(
         default=None,
+        exclude=True,
         validation_alias=AliasChoices("FAL_KEY", "GANDIWA_FAL_KEY"),
     )
 
@@ -132,7 +135,7 @@ class Settings(BaseSettings):
         for key, value in os.environ.items():
             if not key.startswith("GANDIWA_NINEROUTER_API_KEY_"):
                 continue
-            name = key[len("GANDIWA_NINEROUTER_API_KEY_"):]
+            name = key[len("GANDIWA_NINEROUTER_API_KEY_") :]
             if name and re.fullmatch(r"[A-Z0-9]+(_[A-Z0-9]+)*", name):
                 keys.setdefault(name, SecretStr(value))
         if self.NINEROUTER_INSTANCES is None:
@@ -166,6 +169,10 @@ class Settings(BaseSettings):
             direct = self.NINEROUTER_API_KEY_INSTANCE.get(key.replace("-", "_"))
         return direct.get_secret_value() if direct is not None else None
 
+    def fal_api_key(self) -> str | None:
+        """Raw fal key for server-side transport injection only."""
+        return self.FAL_KEY.get_secret_value() if self.FAL_KEY is not None else None
+
     @model_validator(mode="after")
     def validate_security_settings(self) -> Settings:
         if not self.DATABASE_URL.startswith("sqlite:///"):
@@ -174,6 +181,8 @@ class Settings(BaseSettings):
             raise ValueError("DATABASE_BUSY_TIMEOUT_MS must be greater than or equal to 1")
         if self.WORKER_HEARTBEAT_STALE_SECONDS < 1:
             raise ValueError("WORKER_HEARTBEAT_STALE_SECONDS must be greater than or equal to 1")
+        if self.ARTIFACT_RETENTION_HOURS < 1 or self.MAX_ARTIFACT_BYTES < 1:
+            raise ValueError("artifact retention and byte limits must be positive")
         if not self.SVG_QUARANTINE_DIR.is_absolute():
             raise ValueError("SVG_QUARANTINE_DIR must be an absolute path")
         if self.SVG_QUARANTINE_TTL_SECONDS < 1:

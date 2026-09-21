@@ -78,6 +78,11 @@ def run_connector_dispatch(
     execution = JobExecution(
         job=job,
         mark_dispatched=mark_dispatched,
+        record_remote_job_id=lambda remote_id: queue.record_remote_job_id(
+            job_id,
+            worker_id,
+            remote_id,
+        ),
         heartbeat=lambda: queue.heartbeat(
             job_id,
             worker_id,

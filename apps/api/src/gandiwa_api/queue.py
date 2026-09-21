@@ -90,6 +90,7 @@ class JobExecution:
 
     job: QueueJob
     mark_dispatched: Callable[[str | None], QueueJob]
+    record_remote_job_id: Callable[[str], QueueJob]
     heartbeat: Callable[[], QueueJob]
     cancellation_requested: Callable[[], bool]
     timeout_seconds: int
@@ -357,6 +358,40 @@ class QueueStore:
                 raise QueueError("dispatch boundary requires an active uncancelled lease")
         return self.get(job_id)
 
+    def record_remote_job_id(
+        self,
+        job_id: str,
+        worker_id: str,
+        remote_job_id: str,
+    ) -> QueueJob:
+        """Persist a provider ID immediately after submit without rebinding it.
+
+        Cancellation does not block this write: once submit crossed the remote
+        boundary, preserving its identifier is required for audit and remote
+        cancellation even if a local cancellation arrived concurrently.
+        """
+        if not remote_job_id.strip():
+            raise QueueError("remote job id is required")
+        now = _dbtime(_utcnow())
+        with self.engine.begin() as connection:
+            result = connection.execute(
+                text(
+                    "UPDATE generation_job SET remote_job_id = :remote_job_id "
+                    "WHERE id = :id AND lease_owner = :owner "
+                    "AND status = 'waiting_provider' AND lease_expires_at >= :now "
+                    "AND (remote_job_id IS NULL OR remote_job_id = :remote_job_id)"
+                ),
+                {
+                    "remote_job_id": remote_job_id,
+                    "id": job_id,
+                    "owner": worker_id,
+                    "now": now,
+                },
+            )
+            if result.rowcount != 1:
+                raise QueueError("remote job id cannot be persisted or rebound")
+        return self.get(job_id)
+
     def cancellation_requested(self, job_id: str) -> bool:
         return self.get(job_id).cancel_requested_at is not None
 
@@ -409,9 +444,13 @@ class QueueStore:
                 remote_job_id=remote_id,
             )
 
+        def record_remote_job_id(remote_id: str) -> QueueJob:
+            return self.record_remote_job_id(job_id, worker_id, remote_id)
+
         execution = JobExecution(
             job=job,
             mark_dispatched=mark_dispatched,
+            record_remote_job_id=record_remote_job_id,
             heartbeat=lambda: self.heartbeat(
                 job_id,
                 worker_id,

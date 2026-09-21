@@ -278,6 +278,30 @@ def test_cancellation_during_handler_blocks_success(store: QueueStore) -> None:
     assert result.result_manifest is None
 
 
+def test_record_remote_job_id_persists_immediately_after_dispatch(store: QueueStore) -> None:
+    job_id = store.enqueue(job_type="generate")
+    store.claim_next("worker-a", lease_seconds=30)
+    store.mark_dispatched(job_id, "worker-a")
+
+    recorded = store.record_remote_job_id(job_id, "worker-a", "fal-request-123")
+
+    assert recorded.status == "waiting_provider"
+    assert recorded.remote_job_id == "fal-request-123"
+
+
+def test_record_remote_job_id_is_idempotent_and_rejects_rebinding(store: QueueStore) -> None:
+    job_id = store.enqueue(job_type="generate")
+    store.claim_next("worker-a", lease_seconds=30)
+    store.mark_dispatched(job_id, "worker-a")
+    store.record_remote_job_id(job_id, "worker-a", "fal-request-123")
+
+    same = store.record_remote_job_id(job_id, "worker-a", "fal-request-123")
+    assert same.remote_job_id == "fal-request-123"
+
+    with pytest.raises(QueueError, match="remote job id"):
+        store.record_remote_job_id(job_id, "worker-a", "different-request")
+
+
 def test_finalize_success_atomically_persists_remote_job_id(store: QueueStore) -> None:
     job_id = store.enqueue(job_type="generate")
     store.claim_next("worker-a", lease_seconds=30)

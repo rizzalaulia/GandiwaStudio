@@ -214,6 +214,9 @@ def execution_for(queue: QueueStore, job_id: str) -> JobExecution:
     return JobExecution(
         job=queue.get(job_id),
         mark_dispatched=mark_dispatched,
+        record_remote_job_id=lambda remote_id: queue.record_remote_job_id(
+            job_id, "worker", remote_id
+        ),
         heartbeat=lambda: queue.heartbeat(job_id, "worker", lease_seconds=30),
         cancellation_requested=lambda: queue.cancellation_requested(job_id),
         timeout_seconds=300,

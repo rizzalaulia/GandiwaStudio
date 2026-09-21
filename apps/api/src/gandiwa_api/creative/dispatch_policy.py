@@ -15,12 +15,13 @@ from gandiwa_api.creative.approval import current_prompt_digest
 from gandiwa_api.creative.generation_gate import evaluate_generation_readiness
 from gandiwa_api.creative.models import CreativeSession
 from gandiwa_api.creative.session import SessionService, record_generation_provenance
+from gandiwa_api.queue import QueueStore
 
 # Current production registry. A future connector must deliberately inject a
 # provider → model mapping; independent allowlists would permit unsafe cross-
 # provider/model combinations.
 CURRENT_IMAGE_GENERATION_PROVIDER_MODELS: dict[str, frozenset[str]] = {
-    "fal.ai": frozenset(
+    "fal": frozenset(
         {
             "fal-ai/flux/schnell",
             "fal-ai/flux/dev",
@@ -37,6 +38,67 @@ prompt_snapshot_digest = current_prompt_digest
 
 class GenerationDispatchError(RuntimeError):
     """A generation request was rejected before trustworthy completion."""
+
+
+def enqueue_approved_generation(
+    queue: QueueStore,
+    session: CreativeSession,
+    *,
+    owner_session_id: str,
+    rules_snapshot: dict[str, object],
+    idempotency_key: str,
+    origin: str,
+    provider_models: dict[str, set[str] | frozenset[str]] | None = None,
+) -> str:
+    """Freeze one approved prompt and its rules into a durable fal job."""
+    registry = (
+        CURRENT_IMAGE_GENERATION_PROVIDER_MODELS
+        if provider_models is None
+        else {provider: frozenset(models) for provider, models in provider_models.items()}
+    )
+    models = registry.get(session.prompt.provider_id)
+    if models is None or session.prompt.model_id not in models:
+        raise GenerationDispatchError("image generation provider/model is not registered")
+    gate = evaluate_generation_readiness(session, image_capable_models=models)
+    if not gate.ready:
+        raise GenerationDispatchError(f"GENERATION_READY is blocked: {', '.join(gate.blockers)}")
+    digest = prompt_snapshot_digest(session)
+    if not session.human_prompt_approval or session.approved_prompt_digest != digest:
+        raise GenerationDispatchError("exact prompt snapshot requires human approval")
+    if session.last_dispatched_prompt_digest == digest:
+        raise GenerationDispatchError("approved prompt was already submitted to the provider")
+    if (
+        not owner_session_id
+        or not idempotency_key
+        or origin.rstrip("/") != "https://queue.fal.run"
+        or not rules_snapshot
+    ):
+        raise GenerationDispatchError("generation job identity and rules snapshot are required")
+    prompt = session.prompt
+    job_id = queue.enqueue(
+        job_type="generate",
+        provider_id=prompt.provider_id,
+        model_id=prompt.model_id,
+        parameters={
+            "origin": origin,
+            "idempotency_key": idempotency_key,
+            "capability": "generate_image",
+            "owner_session_id": owner_session_id,
+            "approved_prompt_digest": digest,
+            "rules_snapshot": dict(rules_snapshot),
+            "generation_payload": {
+                "prompt": prompt.prompt_text,
+                "negative_prompt": prompt.negative_prompt_text,
+                "image_size": {
+                    "width": prompt.target_width,
+                    "height": prompt.target_height,
+                },
+                "num_images": 1,
+            },
+        },
+    )
+    session.last_dispatched_prompt_digest = digest
+    return job_id
 
 
 class GenerationTransport(Protocol):
@@ -75,9 +137,7 @@ def dispatch_generation(
         image_capable_models=models,
     )
     if not gate.ready:
-        raise GenerationDispatchError(
-            f"GENERATION_READY is blocked: {', '.join(gate.blockers)}"
-        )
+        raise GenerationDispatchError(f"GENERATION_READY is blocked: {', '.join(gate.blockers)}")
     if not session.human_prompt_approval:
         raise GenerationDispatchError("exact prompt snapshot requires human approval")
     if session.approved_prompt_digest != prompt_snapshot_digest(session):
@@ -131,12 +191,9 @@ def dispatch_and_record_generation(
     refused before provider I/O, so an accidental retry cannot spend credits.
     """
     current = service.current_revision
-    has_pending_regeneration = (
-        current is not None
-        and (
-            service.session.pending_rejection_reason is not None
-            or service.session.prompt.prompt_text != current.prompt_text
-        )
+    has_pending_regeneration = current is not None and (
+        service.session.pending_rejection_reason is not None
+        or service.session.prompt.prompt_text != current.prompt_text
     )
     if current is not None and current.provenance is not None and not has_pending_regeneration:
         raise GenerationDispatchError("current revision was already dispatched")
@@ -165,5 +222,6 @@ __all__ = [
     "GenerationTransport",
     "dispatch_and_record_generation",
     "dispatch_generation",
+    "enqueue_approved_generation",
     "prompt_snapshot_digest",
 ]
