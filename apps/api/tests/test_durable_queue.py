@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -18,6 +20,7 @@ from gandiwa_api.queue import (
     QueueError,
     QueueStore,
     RetryableJobError,
+    _dbtime,
 )
 
 
@@ -278,6 +281,30 @@ def test_cancellation_during_handler_blocks_success(store: QueueStore) -> None:
     assert result.result_manifest is None
 
 
+def test_record_remote_job_id_persists_immediately_after_dispatch(store: QueueStore) -> None:
+    job_id = store.enqueue(job_type="generate")
+    store.claim_next("worker-a", lease_seconds=30)
+    store.mark_dispatched(job_id, "worker-a")
+
+    recorded = store.record_remote_job_id(job_id, "worker-a", "fal-request-123")
+
+    assert recorded.status == "waiting_provider"
+    assert recorded.remote_job_id == "fal-request-123"
+
+
+def test_record_remote_job_id_is_idempotent_and_rejects_rebinding(store: QueueStore) -> None:
+    job_id = store.enqueue(job_type="generate")
+    store.claim_next("worker-a", lease_seconds=30)
+    store.mark_dispatched(job_id, "worker-a")
+    store.record_remote_job_id(job_id, "worker-a", "fal-request-123")
+
+    same = store.record_remote_job_id(job_id, "worker-a", "fal-request-123")
+    assert same.remote_job_id == "fal-request-123"
+
+    with pytest.raises(QueueError, match="remote job id"):
+        store.record_remote_job_id(job_id, "worker-a", "different-request")
+
+
 def test_finalize_success_atomically_persists_remote_job_id(store: QueueStore) -> None:
     job_id = store.enqueue(job_type="generate")
     store.claim_next("worker-a", lease_seconds=30)
@@ -293,6 +320,22 @@ def test_finalize_success_atomically_persists_remote_job_id(store: QueueStore) -
     assert final.status == "succeeded"
     assert final.remote_job_id == "provider-job-123"
     assert final.result_manifest == {"artifact": "opaque-id"}
+
+
+def test_failure_and_review_finalization_require_an_active_lease(store: QueueStore) -> None:
+    job_id = store.enqueue(job_type="generate")
+    store.claim_next("worker-a", lease_seconds=30)
+    with store.engine.begin() as connection:
+        connection.execute(
+            text("UPDATE generation_job SET lease_expires_at = :expired WHERE id = :id"),
+            {"expired": _dbtime(datetime.now(UTC) - timedelta(seconds=1)), "id": job_id},
+        )
+
+    with pytest.raises(QueueError, match="failed job update"):
+        store._fail(job_id, "worker-a", "HANDLER_ERROR")
+    with pytest.raises(QueueError, match="needs-review update"):
+        store._needs_review(job_id, "worker-a", "UNKNOWN_PROVIDER_OUTCOME")
+    assert store.get(job_id).status == "running"
 
 
 def test_handler_success_and_handler_failure_are_persisted(store: QueueStore) -> None:
@@ -316,3 +359,101 @@ def test_handler_success_and_handler_failure_are_persisted(store: QueueStore) ->
     assert failure.status == "failed"
     assert failure.error_code == "HANDLER_ERROR"
     assert "secret token" not in (failure.redacted_error or "")
+
+
+def test_enqueue_derives_one_deterministic_ruleset_snapshot_id_for_equal_generation_rules(
+    store: QueueStore,
+) -> None:
+    parameters = {
+        "capability": "generate_image",
+        "rules_snapshot": {"policy": "stock-safe", "version": 3, "items": ["a", "b"]},
+    }
+    first = store.enqueue(job_type="generate", provider_id="fal", parameters=dict(parameters))
+    second = store.enqueue(job_type="generate", provider_id="fal", parameters=dict(parameters))
+
+    first_id = store.get(first).ruleset_snapshot_id
+    assert isinstance(first_id, str)
+    assert len(first_id) == 36
+    assert str(uuid.UUID(first_id)) == first_id
+    assert store.get(second).ruleset_snapshot_id == first_id
+
+
+def test_ruleset_snapshot_id_binds_snapshot_content_and_generation_identity(
+    store: QueueStore,
+) -> None:
+    parameters = {"capability": "generate_image", "rules_snapshot": {"policy": "stock-safe"}}
+    base = store.enqueue(
+        job_type="generate",
+        provider_id="fal",
+        model_id="fal-ai/flux/dev",
+        parameters=dict(parameters),
+    )
+    other_model = store.enqueue(
+        job_type="generate",
+        provider_id="fal",
+        model_id="fal-ai/sdxl",
+        parameters=dict(parameters),
+    )
+    changed_rules = store.enqueue(
+        job_type="generate",
+        provider_id="fal",
+        model_id="fal-ai/flux/dev",
+        parameters={
+            "capability": "generate_image",
+            "rules_snapshot": {"policy": "stock-safe", "version": 2},
+        },
+    )
+
+    assert store.get(other_model).ruleset_snapshot_id != store.get(base).ruleset_snapshot_id
+    assert store.get(changed_rules).ruleset_snapshot_id != store.get(base).ruleset_snapshot_id
+
+
+def test_connector_contract_jobs_without_generation_rules_are_still_enqueueable(
+    store: QueueStore,
+) -> None:
+    """Layer boundary: rules enforcement lives in the #58 dispatch policy,
+    not the #21/#23 queue layer; capability-marker jobs stay legal there."""
+
+    capability_job = store.enqueue(
+        job_type="generate",
+        provider_id="fake-provider",
+        parameters={"capability": "generate_image", "origin": "fake://localhost"},
+    )
+    assert store.get(capability_job).ruleset_snapshot_id is None
+
+    with_rules = store.enqueue(
+        job_type="generate",
+        provider_id="fal",
+        parameters={
+            "capability": "generate_image",
+            "rules_snapshot": {"policy": "stock-safe"},
+        },
+    )
+    assert len(store.get(with_rules).ruleset_snapshot_id or "") == 36
+
+    generation_no_capability = store.enqueue(
+        job_type="generate",
+        provider_id="fal",
+        parameters={"rules_snapshot": {"policy": "stock-safe"}},
+    )
+    assert store.get(generation_no_capability).ruleset_snapshot_id is None
+
+
+def test_preexisting_legacy_rows_are_never_resnapshotted(store: QueueStore) -> None:
+    """Regression guard: derivation happens at enqueue only, no read backfill."""
+    legacy_id = str(uuid.uuid4())
+    with store.engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO generation_job "
+                "(id, job_type, status, priority, parameters, attempt_count, created_at) "
+                "VALUES (:id, 'generate', 'queued', 0, :parameters, 0, :created_at)"
+            ),
+            {
+                "id": legacy_id,
+                "parameters": json.dumps({"capability": "generate_image"}),
+                "created_at": _dbtime(datetime.now(UTC)),
+            },
+        )
+
+    assert store.get(legacy_id).ruleset_snapshot_id is None

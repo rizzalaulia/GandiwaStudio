@@ -51,6 +51,44 @@ _TRANSITIONS: dict[str, set[str]] = {
 }
 
 
+_GENERATION_CAPABILITY = "generate_image"
+
+
+def _derive_ruleset_snapshot_id(
+    parameters: Mapping[str, Any] | None,
+    *,
+    provider_id: str | None,
+    model_id: str | None,
+) -> str | None:
+    """Bind one generation job to one frozen rules snapshot (UUIDv5, length 36).
+
+    The identifier is deterministic in the canonical JSON of the snapshot plus
+    the creation identity, so equal rules never fork multiple snapshot IDs and
+    any rule/identity byte change forks a new one. Deterministic derivation is
+    enqueue-only: preexisting legacy rows keep NULL (no read-time backfill).
+    """
+    if not parameters:
+        return None
+    rules_snapshot = parameters.get("rules_snapshot")
+    if not isinstance(rules_snapshot, Mapping) or not rules_snapshot:
+        return None
+    if parameters.get("capability") != _GENERATION_CAPABILITY:
+        return None
+    identity_material = json.dumps(
+        {
+            "capability": parameters["capability"],
+            "provider_id": provider_id,
+            "model_id": model_id,
+            "rules_snapshot": rules_snapshot,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    namespace = uuid.uuid5(uuid.NAMESPACE_URL, "gandiwa:ruleset-snapshot")
+    return str(uuid.uuid5(namespace, identity_material.hex()))
+
+
 class QueueError(RuntimeError):
     """Raised when a queue contract would be violated."""
 
@@ -69,6 +107,7 @@ class QueueJob:
     priority: int
     provider_id: str | None
     model_id: str | None
+    ruleset_snapshot_id: str | None
     parameters: dict[str, Any]
     attempt_count: int
     remote_job_id: str | None
@@ -90,6 +129,7 @@ class JobExecution:
 
     job: QueueJob
     mark_dispatched: Callable[[str | None], QueueJob]
+    record_remote_job_id: Callable[[str], QueueJob]
     heartbeat: Callable[[], QueueJob]
     cancellation_requested: Callable[[], bool]
     timeout_seconds: int
@@ -134,6 +174,7 @@ def _row_to_job(row: Any) -> QueueJob:
         priority=int(mapping["priority"]),
         provider_id=mapping["provider_id"],
         model_id=mapping["model_id"],
+        ruleset_snapshot_id=mapping["ruleset_snapshot_id"],
         parameters=json.loads(mapping["parameters"] or "{}"),
         attempt_count=int(mapping["attempt_count"]),
         remote_job_id=mapping["remote_job_id"],
@@ -179,15 +220,21 @@ class QueueStore:
             raise QueueError("priority must be non-negative")
         if not job_type.strip():
             raise QueueError("job_type is required")
+        frozen_parameters = parameters or {}
+        ruleset_snapshot_id = _derive_ruleset_snapshot_id(
+            frozen_parameters,
+            provider_id=provider_id,
+            model_id=model_id,
+        )
         job_id = str(uuid.uuid4())
         with self.engine.begin() as connection:
             connection.execute(
                 text(
                     "INSERT INTO generation_job "
-                    "(id, job_type, status, priority, provider_id, model_id, parameters, "
-                    "attempt_count, created_at) VALUES "
+                    "(id, job_type, status, priority, provider_id, model_id, "
+                    "ruleset_snapshot_id, parameters, attempt_count, created_at) VALUES "
                     "(:id, :job_type, :status, :priority, :provider_id, :model_id, "
-                    ":parameters, 0, :created_at)"
+                    ":ruleset_snapshot_id, :parameters, 0, :created_at)"
                 ),
                 {
                     "id": job_id,
@@ -196,7 +243,8 @@ class QueueStore:
                     "priority": priority,
                     "provider_id": provider_id,
                     "model_id": model_id,
-                    "parameters": json.dumps(parameters or {}),
+                    "ruleset_snapshot_id": ruleset_snapshot_id,
+                    "parameters": json.dumps(frozen_parameters),
                     "created_at": _dbtime(_utcnow()),
                 },
             )
@@ -357,6 +405,40 @@ class QueueStore:
                 raise QueueError("dispatch boundary requires an active uncancelled lease")
         return self.get(job_id)
 
+    def record_remote_job_id(
+        self,
+        job_id: str,
+        worker_id: str,
+        remote_job_id: str,
+    ) -> QueueJob:
+        """Persist a provider ID immediately after submit without rebinding it.
+
+        Cancellation does not block this write: once submit crossed the remote
+        boundary, preserving its identifier is required for audit and remote
+        cancellation even if a local cancellation arrived concurrently.
+        """
+        if not remote_job_id.strip():
+            raise QueueError("remote job id is required")
+        now = _dbtime(_utcnow())
+        with self.engine.begin() as connection:
+            result = connection.execute(
+                text(
+                    "UPDATE generation_job SET remote_job_id = :remote_job_id "
+                    "WHERE id = :id AND lease_owner = :owner "
+                    "AND status = 'waiting_provider' AND lease_expires_at >= :now "
+                    "AND (remote_job_id IS NULL OR remote_job_id = :remote_job_id)"
+                ),
+                {
+                    "remote_job_id": remote_job_id,
+                    "id": job_id,
+                    "owner": worker_id,
+                    "now": now,
+                },
+            )
+            if result.rowcount != 1:
+                raise QueueError("remote job id cannot be persisted or rebound")
+        return self.get(job_id)
+
     def cancellation_requested(self, job_id: str) -> bool:
         return self.get(job_id).cancel_requested_at is not None
 
@@ -409,9 +491,13 @@ class QueueStore:
                 remote_job_id=remote_id,
             )
 
+        def record_remote_job_id(remote_id: str) -> QueueJob:
+            return self.record_remote_job_id(job_id, worker_id, remote_id)
+
         execution = JobExecution(
             job=job,
             mark_dispatched=mark_dispatched,
+            record_remote_job_id=record_remote_job_id,
             heartbeat=lambda: self.heartbeat(
                 job_id,
                 worker_id,
@@ -518,7 +604,9 @@ class QueueStore:
                 text(
                     "UPDATE generation_job SET status = 'needs_review', error_code = :code, "
                     "redacted_error = :message, completed_at = :completed "
-                    "WHERE id = :id AND lease_owner = :owner"
+                    "WHERE id = :id AND lease_owner = :owner "
+                    "AND status IN ('running', 'waiting_provider', 'processing') "
+                    "AND lease_expires_at >= :completed"
                 ),
                 {
                     "code": error_code,
@@ -538,7 +626,9 @@ class QueueStore:
                 text(
                     "UPDATE generation_job SET status = 'failed', error_code = :code, "
                     "redacted_error = :message, completed_at = :completed "
-                    "WHERE id = :id AND lease_owner = :owner"
+                    "WHERE id = :id AND lease_owner = :owner "
+                    "AND status IN ('running', 'waiting_provider', 'processing') "
+                    "AND lease_expires_at >= :completed"
                 ),
                 {
                     "code": error_code,

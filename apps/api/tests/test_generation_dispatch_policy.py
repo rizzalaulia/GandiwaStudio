@@ -37,16 +37,22 @@ def valid_session(*, approved: bool = True) -> CreativeSession:
             negative_prompt_text="logo, brand, watermark, random text",
             content_type="raster",
             creation_method="generative_ai",
-            provider_id="fal.ai",
+            provider_id="fal",
             model_id="fal-ai/flux/dev",
             target_width=2400,
             target_height=1667,
             aspect_ratio="3:2",
             orientation="landscape",
             stock_constraints=StockConstraints(
-                no_logo=True, no_brand=True, no_watermark=True, no_random_text=True,
-                no_fake_ui=True, no_unintentional_crop=True, no_malformed_anatomy=True,
-                no_copyrighted_property=True, negative_space_decision="right third open",
+                no_logo=True,
+                no_brand=True,
+                no_watermark=True,
+                no_random_text=True,
+                no_fake_ui=True,
+                no_unintentional_crop=True,
+                no_malformed_anatomy=True,
+                no_copyrighted_property=True,
+                negative_space_decision="right third open",
             ),
         ),
     )
@@ -72,9 +78,7 @@ def test_dispatch_refuses_unapproved_exact_prompt_before_provider_call() -> None
         ("orientation", "portrait"),
     ],
 )
-def test_dispatch_refuses_when_any_approved_prompt_field_changes(
-    field: str, value: str
-) -> None:
+def test_dispatch_refuses_when_any_approved_prompt_field_changes(field: str, value: str) -> None:
     transport = FakeGenerationTransport()
     session = valid_session()
     setattr(session.prompt, field, value)
@@ -119,7 +123,7 @@ def test_dispatch_refuses_model_registered_to_a_different_provider() -> None:
         dispatch_generation(
             session,
             transport,
-            provider_models={"fal.ai": {"fal-ai/flux/dev"}, "futuregen": {"futuregen/ultra-image"}},
+            provider_models={"fal": {"fal-ai/flux/dev"}, "futuregen": {"futuregen/ultra-image"}},
         )
 
     assert transport.calls == []
@@ -162,15 +166,17 @@ def test_dispatch_sends_exact_prompt_and_resolution_parameters_to_provider() -> 
     result = dispatch_generation(valid_session(), transport)
 
     assert result.provider_job_id == "fake-job-123"
-    assert transport.calls == [{
-        "prompt": "Editorial ceramic mug on linen, 2400x1667 output",
-        "negative_prompt": "logo, brand, watermark, random text",
-        "provider": "fal.ai",
-        "model": "fal-ai/flux/dev",
-        "width": 2400,
-        "height": 1667,
-        "aspect_ratio": "3:2",
-    }]
+    assert transport.calls == [
+        {
+            "prompt": "Editorial ceramic mug on linen, 2400x1667 output",
+            "negative_prompt": "logo, brand, watermark, random text",
+            "provider": "fal",
+            "model": "fal-ai/flux/dev",
+            "width": 2400,
+            "height": 1667,
+            "aspect_ratio": "3:2",
+        }
+    ]
 
 
 def test_dispatch_accepts_registered_future_provider_capability() -> None:

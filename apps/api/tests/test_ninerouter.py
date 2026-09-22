@@ -214,6 +214,9 @@ def execution_for(queue: QueueStore, job_id: str) -> JobExecution:
     return JobExecution(
         job=queue.get(job_id),
         mark_dispatched=mark_dispatched,
+        record_remote_job_id=lambda remote_id: queue.record_remote_job_id(
+            job_id, "worker", remote_id
+        ),
         heartbeat=lambda: queue.heartbeat(job_id, "worker", lease_seconds=30),
         cancellation_requested=lambda: queue.cancellation_requested(job_id),
         timeout_seconds=300,
@@ -506,7 +509,7 @@ def test_stale_lease_success_is_needs_review(
     )
     final = queue.get(job_id)
     assert final.status == "needs_review"
-    assert final.error_code == "UNKNOWN_PROVIDER_OUTCOME"
+    assert final.error_code == "LEASE_EXPIRED_UNKNOWN_DISPATCH"
     assert final.remote_job_id is None
 
 
