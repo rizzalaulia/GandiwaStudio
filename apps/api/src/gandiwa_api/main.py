@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import tempfile
+import uuid
 from collections.abc import AsyncIterator
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
@@ -18,6 +19,14 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 
 from gandiwa_api.artifact_store import AccessDenied, ArtifactStore, ExpiredArtifact
 from gandiwa_api.config import Settings
+from gandiwa_api.creative.http_api import (
+    CreativeJobRequest,
+    enqueue_browser_job,
+    get_owned_job,
+    public_job_view,
+    request_owned_cancel,
+    require_owned_session,
+)
 from gandiwa_api.database import create_sqlite_engine
 from gandiwa_api.raster_preflight import DEFAULT_LIMITS as RASTER_PREFLIGHT_LIMITS
 from gandiwa_api.raster_preflight import inspect_raster
@@ -28,6 +37,7 @@ from gandiwa_api.security.csrf import (
     generate_csrf_token,
     session_id_from_token,
     set_csrf_cookie,
+    set_session_cookie,
 )
 from gandiwa_api.security.providers import ProviderInfo, get_configured_providers
 from gandiwa_api.svg_preflight import DEFAULT_LIMITS as SVG_PREFLIGHT_LIMITS
@@ -271,6 +281,51 @@ def list_providers() -> list[ProviderInfo]:
     """List available AI connectors configured on backend without exposing secrets."""
     current_settings = Settings()
     return get_configured_providers(current_settings)
+
+
+@app.get("/api/v1/creative/bootstrap")
+def bootstrap_creative_session(request: Request) -> JSONResponse:
+    """Issue an opaque browser ownership cookie without persisting project data server-side."""
+    current_settings = Settings()
+    existing = session_id_from_token(
+        request.cookies.get(SESSION_COOKIE_NAME), current_settings.SESSION_SECRET
+    )
+    response = JSONResponse(content={"session_ready": True})
+    if existing is None:
+        set_session_cookie(
+            response,
+            str(uuid.uuid4()),
+            secret=current_settings.SESSION_SECRET,
+            secure=current_settings.SECURE_COOKIES,
+        )
+    return response
+
+
+@app.post("/api/v1/creative/jobs", status_code=status.HTTP_201_CREATED)
+def enqueue_creative_job(payload: CreativeJobRequest, request: Request) -> JSONResponse:
+    """Revalidate an approved local snapshot and enqueue one owned image-generation job."""
+    current_settings = Settings()
+    owner = require_owned_session(request, current_settings)
+    job = enqueue_browser_job(payload, owner_session_id=owner, settings=current_settings)
+    return JSONResponse(status_code=status.HTTP_201_CREATED, content=public_job_view(job))
+
+
+@app.get("/api/v1/creative/jobs/{job_id}")
+def read_creative_job(job_id: str, request: Request) -> JSONResponse:
+    """Read whitelisted progress for the caller's own job only."""
+    current_settings = Settings()
+    owner = require_owned_session(request, current_settings)
+    job = get_owned_job(job_id, owner_session_id=owner, settings=current_settings)
+    return JSONResponse(content=public_job_view(job))
+
+
+@app.delete("/api/v1/creative/jobs/{job_id}")
+def cancel_creative_job(job_id: str, request: Request) -> JSONResponse:
+    """Request cancellation; worker decides the safe terminal outcome."""
+    current_settings = Settings()
+    owner = require_owned_session(request, current_settings)
+    job = request_owned_cancel(job_id, owner_session_id=owner, settings=current_settings)
+    return JSONResponse(content=public_job_view(job))
 
 
 async def read_limited_request_body(

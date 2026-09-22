@@ -23,6 +23,7 @@ import {
   type ProviderOption,
 } from './assistant/router-selection'
 import { GuidedWorkflowShell } from './components/workflow/GuidedWorkflowShell'
+import { BerandaApp } from './beranda/BerandaApp'
 
 const AUDIT_RULESET_ID = 'adobe-stock-2026-09-08-v1'
 const AUDIT_RULESET_VERSION = AUDIT_RULESET_ID
@@ -1089,6 +1090,13 @@ export function App() {
       ) : null}
     </>
   )
+
+  // Issue #26 (opsi B): the native Beranda rides alongside the legacy shell.
+  // Activated only by an explicit opt-in URL, so every legacy test and the
+  // guided shell stay untouched. Hooks stay above; this is a pure render gate.
+  if (typeof window !== 'undefined' && window.location.search.includes('beranda')) {
+    return <BerandaApp />
+  }
 
   return (
     <main className={activeProject ? 'app-shell app-shell-guided' : 'app-shell'}>

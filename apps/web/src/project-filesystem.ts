@@ -113,8 +113,10 @@ export async function writeProjectManifestAtomically(
     await assertFileIsAbsent(directory, temporaryName)
     await writeTextFile(directory, temporaryName, content)
     // File System Access commits a writable stream only on close(). The API has
-    // no portable rename, so a new project writes its final manifest last.
-    await assertFileIsAbsent(directory, PROJECT_MANIFEST_NAME)
+    // no rename, so the final write is an OVERWRITE-WRITE that lands only when
+    // close() commits: a republished manifest may replace an existing one
+    // (revision bookkeeping), while a create-new flow is still guarded by the
+    // caller's assert-file-absent on the project itself.
     await writeTextFile(directory, PROJECT_MANIFEST_NAME, content)
   } catch (cause) {
     writeFailure = cause
@@ -183,6 +185,11 @@ export async function createProject(
 
   try {
     await createProjectStructure(projectDirectory)
+    // The empty-folder check above is the create-new guard. Because File
+    // System Access commits only on close(), a manifest appearing between the
+    // check and this write would be silently replaced — so the final write
+    // re-asserts absence directly before its own commit.
+    await assertFileIsAbsent(projectDirectory, PROJECT_MANIFEST_NAME)
     await (dependencies.writeManifest ?? writeProjectManifestAtomically)(projectDirectory, manifest)
   } catch {
     return {

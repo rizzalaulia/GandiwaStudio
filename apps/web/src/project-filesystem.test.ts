@@ -227,6 +227,30 @@ describe('createProject', () => {
     ).rejects.toThrow('Unable to remove the temporary project manifest.')
   })
 
+  it('republishes over an existing manifest without touching final-file uniqueness', async () => {
+    const directory = new MemoryDirectory()
+    const seedManifest = {
+      schema_version: 1 as const,
+      project_id: '6e9e0cd4-7b2e-46fc-84ad-5a40816bdca1',
+      project_name: 'Burung Laut',
+      assets: [],
+    }
+    // Seed: the manifest exists (as it does in any open project).
+    await writeProjectManifestAtomically(directory, seedManifest)
+
+    const nextManifest = {
+      ...seedManifest,
+      assets: [{
+        asset_id: '6e9e0cd4-7b2e-46fc-84ad-5a40816bdca1',
+        content_type: 'illustration' as const,
+        creation_method: 'generative_ai' as const,
+        revisions: [{ revision: 1, generation_format: 'png' as const, working_format: 'png' as const, master_format: 'png' as const, submission_format: 'jpeg' as const, relative_path: 'revisions/x/rev-1.png' }],
+      }],
+    }
+    await expect(writeProjectManifestAtomically(directory, nextManifest)).resolves.toBeUndefined()
+    expect(JSON.parse(directory.files.get('gandiwa-project.json')!.content)).toEqual(nextManifest)
+  })
+
   it('preserves a recovery workspace when a manifest write fails', async () => {
     const parent = new MemoryDirectory()
     const baseDependencies = dependencies(parent)

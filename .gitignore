@@ -50,3 +50,6 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 !.vscode/settings.json
+
+# vitest json reporter output
+apps/web/.vitest/

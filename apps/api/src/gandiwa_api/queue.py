@@ -250,6 +250,76 @@ class QueueStore:
             )
         return job_id
 
+    def enqueue_generation_idempotent(
+        self,
+        *,
+        job_type: str,
+        provider_id: str,
+        model_id: str,
+        parameters: dict[str, Any],
+        owner_session_id: str,
+        idempotency_key: str,
+        approved_prompt_digest: str,
+    ) -> str:
+        """Insert one generation job or return its exact prior browser retry.
+
+        SQLite serializes this lookup-and-insert with ``BEGIN IMMEDIATE``. The
+        queue does not expose this lookup publicly: caller ownership stays at
+        the HTTP boundary, and a reused key with different prompt evidence is
+        rejected rather than routed to the wrong job.
+        """
+        if not owner_session_id or not idempotency_key or not approved_prompt_digest:
+            raise QueueError("generation idempotency identity is required")
+        frozen_parameters = dict(parameters)
+        ruleset_snapshot_id = _derive_ruleset_snapshot_id(
+            frozen_parameters,
+            provider_id=provider_id,
+            model_id=model_id,
+        )
+        job_id = str(uuid.uuid4())
+        with self.engine.connect() as connection:
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                rows = connection.execute(
+                    text("SELECT id, parameters FROM generation_job WHERE job_type = :job_type"),
+                    {"job_type": job_type},
+                ).fetchall()
+                for row in rows:
+                    existing = json.loads(row._mapping["parameters"] or "{}")
+                    if (
+                        existing.get("owner_session_id") == owner_session_id
+                        and existing.get("idempotency_key") == idempotency_key
+                    ):
+                        if existing.get("approved_prompt_digest") != approved_prompt_digest:
+                            raise QueueError(
+                                "idempotency key is already bound to a different prompt"
+                            )
+                        connection.commit()
+                        return str(row._mapping["id"])
+                connection.execute(
+                    text(
+                        "INSERT INTO generation_job "
+                        "(id, job_type, status, priority, provider_id, model_id, "
+                        "ruleset_snapshot_id, parameters, attempt_count, created_at) VALUES "
+                        "(:id, :job_type, 'queued', 0, :provider_id, :model_id, "
+                        ":ruleset_snapshot_id, :parameters, 0, :created_at)"
+                    ),
+                    {
+                        "id": job_id,
+                        "job_type": job_type,
+                        "provider_id": provider_id,
+                        "model_id": model_id,
+                        "ruleset_snapshot_id": ruleset_snapshot_id,
+                        "parameters": json.dumps(frozen_parameters),
+                        "created_at": _dbtime(_utcnow()),
+                    },
+                )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+        return job_id
+
     def get(self, job_id: str) -> QueueJob:
         with self.engine.connect() as connection:
             row = connection.execute(_SELECT, {"id": job_id}).fetchone()
