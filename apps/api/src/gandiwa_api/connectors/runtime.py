@@ -7,8 +7,13 @@ reaches the browser: the provider endpoint exposes only per-instance booleans.
 
 from __future__ import annotations
 
+import socket
+import ssl
 from collections.abc import Callable, Mapping
+from http.client import HTTPSConnection
+from ipaddress import IPv4Address, IPv6Address
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -76,28 +81,82 @@ class HttpxJsonTransport:
         return body
 
 
-class HttpxArtifactDownloader:
-    """Stream a fal media URL into bounded memory without following redirects."""
+class _PinnedHTTPSConnection(HTTPSConnection):
+    """Connect to one validated IP while TLS verifies the canonical hostname."""
 
-    def download(self, *, url: str, max_bytes: int, timeout_seconds: float) -> bytes:
-        chunks: list[bytes] = []
-        total = 0
-        with httpx.stream(
-            "GET",
-            url,
-            timeout=timeout_seconds,
-            follow_redirects=False,
-        ) as response:
-            response.raise_for_status()
-            declared = response.headers.get("content-length")
-            if declared is not None and int(declared) > max_bytes:
-                raise ValueError("artifact is too large")
-            for chunk in response.iter_bytes():
-                total += len(chunk)
-                if total > max_bytes:
+    def __init__(
+        self, *, host: str, ip: IPv4Address | IPv6Address, port: int, timeout: float
+    ) -> None:
+        self._tls_context = ssl.create_default_context()
+        super().__init__(host=host, port=port, timeout=timeout, context=self._tls_context)
+        self._validated_ip = str(ip)
+
+    def connect(self) -> None:
+        raw_socket = socket.create_connection((self._validated_ip, self.port), self.timeout)
+        self.sock = self._tls_context.wrap_socket(raw_socket, server_hostname=self.host)
+
+
+class HttpxArtifactDownloader:
+    """Download only through a validated IP; TLS remains hostname-verified.
+
+    The name is retained for compatibility with the existing runtime factory.
+    It deliberately does not call HTTPX for artifact URLs: HTTPX would resolve
+    the hostname again after SSRF validation, reopening DNS-rebinding risk.
+    """
+
+    def download(
+        self,
+        *,
+        url: str,
+        host: str,
+        port: int,
+        resolved_ips: list[IPv4Address | IPv6Address],
+        max_bytes: int,
+        timeout_seconds: float,
+    ) -> bytes:
+        parsed = urlsplit(url)
+        if parsed.hostname != host or parsed.port not in {None, port}:
+            raise ValueError("artifact URL diverged from validated origin")
+        target = parsed.path or "/"
+        if parsed.query:
+            target = f"{target}?{parsed.query}"
+        last_error: OSError | None = None
+        for validated_ip in resolved_ips:
+            connection = _PinnedHTTPSConnection(
+                host=host,
+                ip=validated_ip,
+                port=port,
+                timeout=timeout_seconds,
+            )
+            try:
+                connection.request("GET", target, headers={"Host": host})
+                response = connection.getresponse()
+                if response.status >= 500:
+                    raise httpx.HTTPStatusError(
+                        "artifact upstream unavailable",
+                        request=httpx.Request("GET", url),
+                        response=httpx.Response(response.status),
+                    )
+                if response.status < 200 or response.status >= 300:
+                    raise ValueError("artifact request was not successful")
+                declared = response.getheader("content-length")
+                if declared is not None and int(declared) > max_bytes:
                     raise ValueError("artifact is too large")
-                chunks.append(chunk)
-        return b"".join(chunks)
+                chunks: list[bytes] = []
+                total = 0
+                while chunk := response.read(min(64 * 1024, max_bytes + 1)):
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise ValueError("artifact is too large")
+                    chunks.append(chunk)
+                return b"".join(chunks)
+            except OSError as error:
+                last_error = error
+            finally:
+                connection.close()
+        if last_error is not None:
+            raise last_error
+        raise ValueError("artifact validator supplied no addresses")
 
 
 class InstanceOrigins:

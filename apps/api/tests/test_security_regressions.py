@@ -11,7 +11,11 @@ import pytest
 from gandiwa_api.config import Settings
 from gandiwa_api.main import app
 from gandiwa_api.security.providers import get_configured_providers
-from gandiwa_api.security.ssrf import SSRFValidationError, validate_connector_url
+from gandiwa_api.security.ssrf import (
+    SSRFValidationError,
+    validate_connector_url,
+    validate_fal_media_url,
+)
 
 
 @pytest.mark.parametrize(
@@ -36,6 +40,29 @@ def test_9router_configuration_requires_the_canonical_v1_base_path() -> None:
     ):
         with pytest.raises(SSRFValidationError):
             validate_connector_url(url, approved_9router_target=approved)
+
+
+def test_fal_media_url_requires_official_host_https_port_443_and_public_dns() -> None:
+    public = [ipaddress.ip_address("8.8.8.8")]
+    assert validate_fal_media_url(
+        "https://v3.fal.media/files/example.png?signature=synthetic",
+        dns_resolver=lambda _host, _port: public,
+    )[:2] == ("v3.fal.media", 443)
+
+    for url in (
+        "http://v3.fal.media/files/example.png",
+        "https://v3.fal.media:8443/files/example.png",
+        "https://attacker.example/files/example.png",
+        "https://user@v3.fal.media/files/example.png",
+    ):
+        with pytest.raises(SSRFValidationError):
+            validate_fal_media_url(url, dns_resolver=lambda _host, _port: public)
+
+    with pytest.raises(SSRFValidationError):
+        validate_fal_media_url(
+            "https://v3.fal.media/files/example.png",
+            dns_resolver=lambda _host, _port: [ipaddress.ip_address("127.0.0.1")],
+        )
 
 
 def test_fal_is_not_configured_when_its_endpoint_is_not_the_official_https_origin() -> None:

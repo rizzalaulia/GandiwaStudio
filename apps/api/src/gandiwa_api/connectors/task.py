@@ -93,6 +93,14 @@ def run_connector_dispatch(
         deadline_frozen=deadline_frozen,
     )
 
+    def needs_review_after_provider_boundary() -> Any:
+        """Use expiry recovery rather than permit a stale worker to finalize."""
+        queue.recover_expired()
+        recovered = queue.get(job_id)
+        if recovered.status == "needs_review":
+            return recovered
+        return queue._needs_review(job_id, worker_id, "UNKNOWN_PROVIDER_OUTCOME")
+
     try:
         result = connector.dispatch(identity, execution)
     except QueueError:
@@ -100,24 +108,20 @@ def run_connector_dispatch(
         if claimed.status != "waiting_provider" and claimed.cancel_requested_at is not None:
             return queue.transition(job_id, worker_id, "cancelled")
         if claimed.status == "waiting_provider":
-            return queue._needs_review(job_id, worker_id, "UNKNOWN_PROVIDER_OUTCOME")
+            return needs_review_after_provider_boundary()
         raise
     except ConnectorError as error:
         claimed = queue.get(job_id)
-        if (
-            error.code == "CANCELLED"
-            and claimed.status != "waiting_provider"
-            and claimed.cancel_requested_at is not None
-        ):
+        if error.code == "CANCELLED" and claimed.cancel_requested_at is not None:
             return queue.transition(job_id, worker_id, "cancelled")
         if claimed.status != "waiting_provider":
             return queue._fail(job_id, worker_id, error.code)
-        return queue._needs_review(job_id, worker_id, "UNKNOWN_PROVIDER_OUTCOME")
+        return needs_review_after_provider_boundary()
     except Exception:
         claimed = queue.get(job_id)
         if claimed.status != "waiting_provider":
             return queue._fail(job_id, worker_id, "CONNECTOR_ERROR")
-        return queue._needs_review(job_id, worker_id, "UNKNOWN_PROVIDER_OUTCOME")
+        return needs_review_after_provider_boundary()
 
     claimed = queue.get(job_id)
     remote_job_id = claimed.remote_job_id

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import time
 from dataclasses import dataclass
 from io import BytesIO
@@ -24,7 +25,7 @@ from gandiwa_api.queue import JobExecution, QueueStore
 
 @dataclass
 class ScriptedFalTransport:
-    responses: list[dict[str, object]]
+    responses: list[dict[str, object] | Exception]
 
     def __post_init__(self) -> None:
         self.calls: list[dict[str, object]] = []
@@ -43,7 +44,10 @@ class ScriptedFalTransport:
             self.remote_id_seen_during_poll = self.queue.get(self.job_id).remote_job_id
         if not self.responses:
             raise AssertionError("unexpected fal transport call")
-        return self.responses.pop(0)
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
 
 
 def _alembic_config(database_url: str) -> Config:
@@ -56,6 +60,12 @@ def queue_store(tmp_path: Path) -> QueueStore:
     database_url = f"sqlite:///{tmp_path / 'fal.sqlite3'}"
     command.upgrade(_alembic_config(database_url), "head")
     return QueueStore(create_sqlite_engine(Settings(DATABASE_URL=database_url)))
+
+
+def approve_synthetic_fal_media(
+    _url: str,
+) -> tuple[str, int, list[ipaddress.IPv4Address]]:
+    return "v3.fal.media", 443, [ipaddress.IPv4Address("8.8.8.8")]
 
 
 def enqueue_claimed_fal_job(queue: QueueStore) -> str:
@@ -127,6 +137,7 @@ def test_submit_persists_remote_id_before_bounded_poll_and_result(tmp_path: Path
         poll_interval_seconds=0,
         artifact_downloader=ScriptedArtifactDownloader(png_bytes()),
         artifact_store=ArtifactStore(queue.engine, tmp_path / "artifacts"),
+        artifact_url_validator=approve_synthetic_fal_media,
     )
 
     result = client.dispatch(
@@ -183,6 +194,48 @@ def test_poll_attempts_are_bounded(tmp_path: Path) -> None:
     assert [call["method"] for call in transport.calls] == ["POST", "GET", "GET"]
 
 
+def test_poll_retries_one_transient_timeout_after_remote_id_persistence(tmp_path: Path) -> None:
+    queue = queue_store(tmp_path)
+    job_id = enqueue_claimed_fal_job(queue)
+    transport = ScriptedFalTransport(
+        [
+            {"request_id": "fal-request-123"},
+            TimeoutError("synthetic transient poll timeout"),
+            {"status": "COMPLETED", "request_id": "fal-request-123"},
+            {
+                "images": [
+                    {
+                        "url": "https://v3.fal.media/files/example/result.png",
+                        "width": 2400,
+                        "height": 1667,
+                        "content_type": "image/png",
+                    }
+                ]
+            },
+        ]
+    )
+    client = FalClient(
+        origin="https://queue.fal.run",
+        transport=transport,
+        max_poll_attempts=2,
+        poll_interval_seconds=0,
+        artifact_downloader=ScriptedArtifactDownloader(png_bytes()),
+        artifact_store=ArtifactStore(queue.engine, tmp_path / "artifacts"),
+        artifact_url_validator=approve_synthetic_fal_media,
+    )
+
+    result = client.dispatch(
+        DispatchIdentity(
+            "fal", "fal-ai/flux/dev", "https://queue.fal.run", "idem-fal-001", "generate_image"
+        ),
+        execution_for(queue, job_id),
+    )
+
+    assert result["provider_job_id"] == "fal-request-123"
+    assert queue.get(job_id).remote_job_id == "fal-request-123"
+    assert [call["method"] for call in transport.calls] == ["POST", "GET", "GET", "GET"]
+
+
 @dataclass
 class ExceptionFalTransport:
     error: Exception
@@ -199,6 +252,76 @@ def response_error(status_code: int) -> httpx.HTTPStatusError:
     request = httpx.Request("POST", "https://queue.fal.run/fal-ai/flux/dev")
     response = httpx.Response(status_code, request=request)
     return httpx.HTTPStatusError("upstream error", request=request, response=response)
+
+
+def test_poll_retries_one_transient_upstream_5xx_after_remote_id_persistence(
+    tmp_path: Path,
+) -> None:
+    queue = queue_store(tmp_path)
+    job_id = enqueue_claimed_fal_job(queue)
+    transport = ScriptedFalTransport(
+        [
+            {"request_id": "fal-request-123"},
+            response_error(503),
+            {"status": "COMPLETED", "request_id": "fal-request-123"},
+            {
+                "images": [
+                    {
+                        "url": "https://v3.fal.media/files/example/result.png",
+                        "width": 2400,
+                        "height": 1667,
+                        "content_type": "image/png",
+                    }
+                ]
+            },
+        ]
+    )
+    client = FalClient(
+        origin="https://queue.fal.run",
+        transport=transport,
+        max_poll_attempts=2,
+        poll_interval_seconds=0,
+        artifact_downloader=ScriptedArtifactDownloader(png_bytes()),
+        artifact_store=ArtifactStore(queue.engine, tmp_path / "artifacts"),
+        artifact_url_validator=approve_synthetic_fal_media,
+    )
+    result = client.dispatch(
+        DispatchIdentity(
+            "fal", "fal-ai/flux/dev", "https://queue.fal.run", "idem-fal-001", "generate_image"
+        ),
+        execution_for(queue, job_id),
+    )
+    assert result["provider_job_id"] == "fal-request-123"
+    assert [call["method"] for call in transport.calls] == ["POST", "GET", "GET", "GET"]
+
+
+def test_poll_exhausts_transient_upstream_5xx_without_resubmitting(tmp_path: Path) -> None:
+    queue = queue_store(tmp_path)
+    job_id = enqueue_claimed_fal_job(queue)
+    transport = ScriptedFalTransport(
+        [
+            {"request_id": "fal-request-123"},
+            response_error(503),
+            response_error(503),
+        ]
+    )
+    client = FalClient(
+        origin="https://queue.fal.run",
+        transport=transport,
+        max_poll_attempts=2,
+        poll_interval_seconds=0,
+    )
+
+    with pytest.raises(Exception) as error:
+        client.dispatch(
+            DispatchIdentity(
+                "fal", "fal-ai/flux/dev", "https://queue.fal.run", "idem-fal-001", "generate_image"
+            ),
+            execution_for(queue, job_id),
+        )
+
+    assert getattr(error.value, "code", None) == "PROVIDER_UNAVAILABLE"
+    assert [call["method"] for call in transport.calls] == ["POST", "GET", "GET"]
 
 
 @pytest.mark.parametrize(
@@ -438,6 +561,7 @@ def test_download_validates_and_stages_private_artifact_without_remote_url(tmp_p
         transport=transport,
         artifact_downloader=downloader,
         artifact_store=store,
+        artifact_url_validator=approve_synthetic_fal_media,
         artifact_ttl_seconds=3600,
         max_artifact_bytes=20 * 1024 * 1024,
     )
@@ -463,6 +587,9 @@ def test_download_validates_and_stages_private_artifact_without_remote_url(tmp_p
     assert downloader.calls == [
         {
             "url": "https://v3.fal.media/files/example/result.png",
+            "host": "v3.fal.media",
+            "port": 443,
+            "resolved_ips": [ipaddress.IPv4Address("8.8.8.8")],
             "max_bytes": 20 * 1024 * 1024,
             "timeout_seconds": pytest.approx(downloader.calls[0]["timeout_seconds"]),
         }
@@ -495,6 +622,7 @@ def test_download_retries_transient_failure_with_a_strict_bound(tmp_path: Path) 
         transport=transport,
         artifact_downloader=downloader,
         artifact_store=store,
+        artifact_url_validator=approve_synthetic_fal_media,
         artifact_ttl_seconds=3600,
         max_artifact_bytes=20 * 1024 * 1024,
         max_download_attempts=2,
@@ -514,6 +642,51 @@ def test_download_retries_transient_failure_with_a_strict_bound(tmp_path: Path) 
     assert len(downloader.calls) == 2
     assert isinstance(result["artifact"], dict)
     assert "id" in result["artifact"]
+
+
+def test_download_retries_transient_upstream_5xx_with_a_strict_bound(tmp_path: Path) -> None:
+    queue = queue_store(tmp_path)
+    job_id = enqueue_claimed_fal_job(queue)
+    transport = ScriptedFalTransport(
+        [
+            {"request_id": "fal-request-123"},
+            {"status": "COMPLETED", "request_id": "fal-request-123"},
+            {
+                "images": [
+                    {
+                        "url": "https://v3.fal.media/files/example/result.png",
+                        "width": 2400,
+                        "height": 1667,
+                        "content_type": "image/png",
+                    }
+                ]
+            },
+        ]
+    )
+    transient = httpx.HTTPStatusError(
+        "upstream unavailable",
+        request=httpx.Request("GET", "https://v3.fal.media/files/example/result.png"),
+        response=httpx.Response(503),
+    )
+    downloader = ScriptedArtifactDownloader([transient, png_bytes()])
+    client = FalClient(
+        origin="https://queue.fal.run",
+        transport=transport,
+        artifact_downloader=downloader,
+        artifact_store=ArtifactStore(queue.engine, tmp_path / "artifacts"),
+        artifact_url_validator=approve_synthetic_fal_media,
+        max_download_attempts=2,
+    )
+
+    result = client.dispatch(
+        DispatchIdentity(
+            "fal", "fal-ai/flux/dev", "https://queue.fal.run", "idem-fal-001", "generate_image"
+        ),
+        execution_for(queue, job_id),
+    )
+
+    assert len(downloader.calls) == 2
+    assert isinstance(result["artifact"], dict)
 
 
 def test_download_rejects_spoofed_or_sub_four_megapixel_artifact(tmp_path: Path) -> None:
@@ -542,6 +715,7 @@ def test_download_rejects_spoofed_or_sub_four_megapixel_artifact(tmp_path: Path)
         transport=transport,
         artifact_downloader=downloader,
         artifact_store=store,
+        artifact_url_validator=approve_synthetic_fal_media,
         artifact_ttl_seconds=3600,
         max_artifact_bytes=20 * 1024 * 1024,
     )

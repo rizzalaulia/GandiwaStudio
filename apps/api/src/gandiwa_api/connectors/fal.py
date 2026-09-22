@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import time
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -13,6 +14,7 @@ from gandiwa_api.artifact_store import ArtifactStore
 from gandiwa_api.connectors.base import ConnectorError, DispatchIdentity
 from gandiwa_api.queue import JobExecution, QueueError
 from gandiwa_api.raster_preflight import RasterPreflightLimits, inspect_raster
+from gandiwa_api.security.ssrf import SSRFValidationError, validate_fal_media_url
 
 _MODEL_ID = re.compile(r"^fal-ai/[a-z0-9][a-z0-9._/-]*[a-z0-9]$")
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
@@ -47,6 +49,7 @@ class FalClient:
         artifact_ttl_seconds: int = 3_600,
         max_artifact_bytes: int = 50 * 1024 * 1024,
         max_download_attempts: int = 2,
+        artifact_url_validator: Callable[[str], object] = validate_fal_media_url,
     ) -> None:
         if origin.rstrip("/") != "https://queue.fal.run":
             raise ValueError("fal origin must be the official queue origin")
@@ -65,6 +68,7 @@ class FalClient:
         self.artifact_ttl_seconds = artifact_ttl_seconds
         self.max_artifact_bytes = max_artifact_bytes
         self.max_download_attempts = max_download_attempts
+        self.artifact_url_validator = artifact_url_validator
 
     def dispatch(self, identity: DispatchIdentity, execution: object) -> dict[str, object]:
         if (
@@ -118,13 +122,21 @@ class FalClient:
                 self._cancel(model_path, request_id, execution)
                 raise FalError("CANCELLED")
             execution.heartbeat()
-            status_body = self._request(
-                method="GET",
-                path=status_path,
-                payload=None,
-                headers={},
-                timeout_seconds=self._remaining(execution),
-            )
+            try:
+                status_body = self._request(
+                    method="GET",
+                    path=status_path,
+                    payload=None,
+                    headers={},
+                    timeout_seconds=self._remaining(execution),
+                )
+            except FalError as error:
+                if error.code not in {"PROVIDER_TIMEOUT", "PROVIDER_UNAVAILABLE"} or (
+                    attempt + 1 >= self.max_poll_attempts
+                ):
+                    raise
+                execution.heartbeat()
+                continue
             echoed_id = status_body.get("request_id")
             if echoed_id is not None and echoed_id != request_id:
                 raise FalError()
@@ -171,6 +183,20 @@ class FalClient:
         if self.artifact_downloader is None or self.artifact_store is None:
             raise FalError("INVALID_ARTIFACT")
         url = str(artifact["url"])
+        try:
+            validated_artifact_origin = self.artifact_url_validator(url)
+        except (SSRFValidationError, ValueError):
+            raise FalError("INVALID_ARTIFACT") from None
+        if (
+            not isinstance(validated_artifact_origin, tuple)
+            or len(validated_artifact_origin) != 3
+            or not isinstance(validated_artifact_origin[0], str)
+            or not isinstance(validated_artifact_origin[1], int)
+            or not isinstance(validated_artifact_origin[2], list)
+            or not validated_artifact_origin[2]
+        ):
+            raise FalError("INVALID_ARTIFACT")
+        artifact_host, artifact_port, artifact_ips = validated_artifact_origin
         declared_mime = str(artifact["content_type"])
         extension = "png" if declared_mime == "image/png" else "jpg"
         payload: bytes | None = None
@@ -178,6 +204,9 @@ class FalClient:
             try:
                 payload = self.artifact_downloader.download(
                     url=url,
+                    host=artifact_host,
+                    port=artifact_port,
+                    resolved_ips=artifact_ips,
                     max_bytes=self.max_artifact_bytes,
                     timeout_seconds=self._remaining(execution),
                 )
@@ -185,6 +214,10 @@ class FalClient:
             except (TimeoutError, httpx.TimeoutException):
                 if attempt + 1 >= self.max_download_attempts:
                     raise FalError("PROVIDER_TIMEOUT") from None
+                execution.heartbeat()
+            except httpx.HTTPStatusError as error:
+                if error.response.status_code < 500 or attempt + 1 >= self.max_download_attempts:
+                    raise FalError("INVALID_ARTIFACT") from None
                 execution.heartbeat()
             except Exception:
                 raise FalError("INVALID_ARTIFACT") from None

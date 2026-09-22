@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 
 import pytest
@@ -9,8 +10,9 @@ from alembic import command
 from alembic.config import Config
 
 from gandiwa_api.config import Settings
-from gandiwa_api.connectors.base import DispatchIdentity
+from gandiwa_api.connectors.base import ConnectorError, DispatchIdentity
 from gandiwa_api.connectors.registry import ConnectorRegistry
+from gandiwa_api.connectors.task import run_connector_dispatch
 from gandiwa_api.creative.dispatch_policy import (
     GenerationDispatchError,
     enqueue_approved_generation,
@@ -94,6 +96,9 @@ def test_enqueue_records_explicit_model_parameters_rules_and_approval(tmp_path: 
     assert job.provider_id == "fal"
     assert job.model_id == "fal-ai/flux/dev"
     assert job.parameters["rules_snapshot"] == rules_snapshot
+    assert isinstance(job.ruleset_snapshot_id, str)
+    assert len(job.ruleset_snapshot_id) == 36
+    assert str(uuid.UUID(job.ruleset_snapshot_id)) == job.ruleset_snapshot_id
     assert job.parameters["approved_prompt_digest"] == prompt_snapshot_digest(session)
     assert job.parameters["generation_payload"] == {
         "prompt": session.prompt.prompt_text,
@@ -162,6 +167,53 @@ class SuccessfulConnector:
         execution.mark_dispatched(None)
         execution.record_remote_job_id("fal-request-123")
         return {"provider_job_id": "fal-request-123", "artifact": {"id": "opaque"}}
+
+
+class AcknowledgedCancellation(ConnectorError):
+    code = "CANCELLED"
+
+
+class CancelAfterRemoteIdConnector:
+    capabilities = ("generate_image",)
+
+    def __init__(self, queue: QueueStore, job_id: str) -> None:
+        self.queue = queue
+        self.job_id = job_id
+
+    def dispatch(self, identity: DispatchIdentity, execution: object) -> dict[str, object]:
+        assert identity.provider_id == "fal"
+        assert isinstance(execution, JobExecution)
+        execution.mark_dispatched(None)
+        execution.record_remote_job_id("fal-request-123")
+        self.queue.request_cancel(self.job_id)
+        raise AcknowledgedCancellation()
+
+
+def test_acknowledged_post_submit_cancel_becomes_cancelled_not_needs_review(tmp_path: Path) -> None:
+    runtime = settings(tmp_path)
+    command.upgrade(_alembic_config(runtime.DATABASE_URL), "head")
+    queue = QueueStore(create_sqlite_engine(runtime))
+    job_id = queue.enqueue(
+        job_type="generate",
+        provider_id="fal",
+        model_id="fal-ai/flux/dev",
+        parameters={
+            "origin": "https://queue.fal.run",
+            "idempotency_key": "fal-job-idem-001",
+            "capability": "generate_image",
+        },
+    )
+    assert queue.claim_next("worker", lease_seconds=30) is not None
+    final = run_connector_dispatch(
+        queue,
+        ConnectorRegistry({"fal": CancelAfterRemoteIdConnector(queue, job_id)}),
+        job_id,
+        "worker",
+    )
+
+    assert final.status == "cancelled"
+    assert final.remote_job_id == "fal-request-123"
+    assert final.error_code is None
 
 
 def test_unknown_fal_dispatch_is_needs_review_without_fallback(tmp_path: Path) -> None:

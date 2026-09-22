@@ -126,6 +126,37 @@ def validate_fal_base_url(
     return "queue.fal.run", 443, resolved
 
 
+FAL_MEDIA_HOSTS = frozenset({"fal.media", "v3.fal.media"})
+
+
+def validate_fal_media_url(
+    url: str,
+    *,
+    dns_resolver: DNSResolver = resolve_host_ips,
+) -> tuple[str, int, list[IPAddress]]:
+    """Validate a signed fal artifact URL immediately before its direct download.
+
+    Query strings are permitted because fal media URLs may be signed. Userinfo,
+    non-HTTPS schemes, alternate ports, non-official hosts, and any non-public
+    DNS answer fail closed.
+    """
+    parsed = urlsplit(url)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname not in FAL_MEDIA_HOSTS
+        or (parsed.port or 443) != 443
+        or parsed.username
+        or parsed.password
+    ):
+        raise SSRFValidationError("artifact URL is not an approved fal media HTTPS origin")
+    resolved = dns_resolver(parsed.hostname, 443)
+    if not resolved:
+        raise SSRFValidationError("fal media hostname did not resolve")
+    for ip in resolved:
+        _require_safe_public_ip(ip)
+    return parsed.hostname, 443, resolved
+
+
 def validate_connector_url(
     url: str,
     *,

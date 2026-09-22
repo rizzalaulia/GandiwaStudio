@@ -23,7 +23,15 @@ Regenerate remains a new creative revision under the Issue #58 contract.
 
 The durable job freezes provider, model, prompt, negative prompt, width, height,
 `num_images=1`, rules snapshot, approval digest, owner, origin, capability, and
-idempotency key.
+idempotency key. At enqueue, the queue derives a deterministic
+`ruleset_snapshot_id` (UUIDv5 over the canonical JSON of the frozen rules
+snapshot plus the creation identity, always 36 chars). Two generation jobs with
+identical frozen rules share one snapshot ID; any rule/model/provider byte
+change forks a new one. Derivation is enqueue-only — preexisting legacy rows
+keep NULL, never backfilled at read time. The generation-rules *requirement*
+lives here in the #58 dispatch policy; the #21/#23 queue layer derives and
+persists the ID but deliberately does not force rules on capability-marker
+connector jobs.
 
 ## Durable queue / fal queue boundary
 

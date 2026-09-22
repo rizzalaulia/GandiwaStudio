@@ -509,7 +509,7 @@ def test_stale_lease_success_is_needs_review(
     )
     final = queue.get(job_id)
     assert final.status == "needs_review"
-    assert final.error_code == "UNKNOWN_PROVIDER_OUTCOME"
+    assert final.error_code == "LEASE_EXPIRED_UNKNOWN_DISPATCH"
     assert final.remote_job_id is None
 
 
