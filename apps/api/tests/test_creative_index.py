@@ -22,6 +22,7 @@ def alembic_config(database_url: str) -> Config:
     config.set_main_option("sqlalchemy.url", database_url)
     return config
 
+
 ROOT = Path(__file__).resolve().parents[3]
 FIXTURES = ROOT / "tests" / "fixtures" / "project-manifest"
 

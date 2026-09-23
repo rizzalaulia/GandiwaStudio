@@ -46,9 +46,7 @@ class CreativeJobRequest(BaseModel):
 
 def require_owned_session(request: Request, settings: Settings) -> str:
     """Read the opaque cookie identity; never accept ownership from JSON."""
-    owner = session_id_from_token(
-        request.cookies.get(SESSION_COOKIE_NAME), settings.SESSION_SECRET
-    )
+    owner = session_id_from_token(request.cookies.get(SESSION_COOKIE_NAME), settings.SESSION_SECRET)
     if owner is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

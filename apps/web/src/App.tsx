@@ -1094,6 +1094,8 @@ export function App() {
   // Issue #26 (opsi B): the native Beranda rides alongside the legacy shell.
   // Activated only by an explicit opt-in URL, so every legacy test and the
   // guided shell stay untouched. Hooks stay above; this is a pure render gate.
+  // Cutover titah 23 Sep: the DEFAULT root is decided in RootRouter (main.tsx),
+  // not here — legacy tests keep rendering <App/> with the guided shell default.
   if (typeof window !== 'undefined' && window.location.search.includes('beranda')) {
     return <BerandaApp />
   }

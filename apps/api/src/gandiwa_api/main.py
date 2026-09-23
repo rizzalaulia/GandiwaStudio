@@ -39,6 +39,7 @@ from gandiwa_api.security.csrf import (
     set_csrf_cookie,
     set_session_cookie,
 )
+from gandiwa_api.security.provider_key_store import ProviderKeyStore
 from gandiwa_api.security.providers import ProviderInfo, get_configured_providers
 from gandiwa_api.svg_preflight import DEFAULT_LIMITS as SVG_PREFLIGHT_LIMITS
 from gandiwa_api.svg_preflight import inspect_svg
@@ -278,9 +279,78 @@ def get_csrf_token() -> JSONResponse:
 
 @app.get("/api/v1/providers")
 def list_providers() -> list[ProviderInfo]:
-    """List available AI connectors configured on backend without exposing secrets."""
+    """List available AI connectors configured on backend without exposing secrets.
+
+    Slice 2 (Issue #26): a key saved through Settings (encrypted store) flips
+    the provider to configured without a restart — env-based config remains
+    the underlying source when the store has no entry.
+    """
     current_settings = Settings()
-    return get_configured_providers(current_settings)
+    providers = get_configured_providers(current_settings)
+    store = ProviderKeyStore(current_settings)
+    if store.get("fal"):
+        providers = [
+            p if p.id != "fal" else p.model_copy(update={"configured": True}) for p in providers
+        ]
+    return providers
+
+
+# Slice 2 (Issue #26): Settings API keys — encrypted server-side store.
+# Fail-closed: redacted errors, no secrets in responses, CSRF via the
+# double-submit cookie; the UI's X-Companion-Token alias is honoured by the
+# CSRF middleware exactly like X-CSRF-Token.
+
+_SETTINGS_PROVIDERS = ("fal", "9router")
+
+
+@app.post("/api/v1/settings/providers")
+def save_provider_settings(request: Request, payload: dict[str, object]) -> JSONResponse:
+    current_settings = Settings()
+    entries = payload.get("providers")
+    if not isinstance(entries, list) or not entries:
+        raise HTTPException(status_code=400, detail="payload must contain providers[]")
+    store = ProviderKeyStore(current_settings)
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise HTTPException(status_code=400, detail="each provider entry must be an object")
+        provider = entry.get("provider")
+        key = entry.get("apiKey")
+        if provider not in _SETTINGS_PROVIDERS:
+            raise HTTPException(status_code=400, detail="unknown provider")
+        if not isinstance(key, str) or not key.strip():
+            raise HTTPException(status_code=400, detail="apiKey must be a non-empty string")
+    for entry in entries:
+        store.set(entry["provider"], entry["apiKey"].strip())
+    return JSONResponse(content={"saved": [entry["provider"] for entry in entries]})
+
+
+@app.get("/api/v1/settings/providers")
+def provider_settings_state() -> list[dict[str, object]]:
+    """Masked state only — never returns the stored key material."""
+    current_settings = Settings()
+    store = ProviderKeyStore(current_settings)
+    states: list[dict[str, object]] = []
+    for provider in _SETTINGS_PROVIDERS:
+        key = store.get(provider)
+        states.append(
+            {
+                "provider": provider,
+                "configured": key is not None,
+                "maskedKey": (f"****{key[-4:]}" if key and len(key) >= 4 else None),
+            }
+        )
+    return states
+
+
+@app.get("/api/v1/settings/providers/{provider}/test")
+def test_provider_connection(provider: str) -> JSONResponse:
+    """Honest smoke probe: verifies stored key presence and provider registry."""
+    if provider not in _SETTINGS_PROVIDERS:
+        raise HTTPException(status_code=404, detail="unknown provider")
+    current_settings = Settings()
+    store = ProviderKeyStore(current_settings)
+    key = store.get(provider)
+    return JSONResponse(content={"ok": key is not None, "provider": provider})
 
 
 @app.get("/api/v1/creative/bootstrap")

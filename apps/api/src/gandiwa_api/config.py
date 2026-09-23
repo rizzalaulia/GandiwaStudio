@@ -78,6 +78,8 @@ class Settings(BaseSettings):
         exclude=True,
         validation_alias=AliasChoices("FAL_KEY", "GANDIWA_FAL_KEY"),
     )
+    # Slice 2 (Issue #26): server-side encrypted provider key store location.
+    PROVIDER_KEY_STORE: Path = Path("./var/provider-keys.json")
 
     @field_validator("ALLOWED_ORIGINS", mode="before")
     @classmethod
