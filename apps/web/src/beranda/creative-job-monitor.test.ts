@@ -16,6 +16,7 @@ const job = (status: string, artifact: unknown = null, message: string | null = 
   provider_id: 'fal',
   model_id: 'fal-ai/flux/schnell',
   attempt_count: 1,
+  artifact_expires_at: null,
   cancel_requested: false,
   created_at: '2026-09-22T00:00:00Z',
   started_at: '2026-09-22T00:01:00Z',

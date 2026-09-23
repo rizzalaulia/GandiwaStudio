@@ -452,7 +452,8 @@ def enqueue_creative_job(payload: CreativeJobRequest, request: Request) -> JSONR
     current_settings = Settings()
     owner = require_owned_session(request, current_settings)
     job = enqueue_browser_job(payload, owner_session_id=owner, settings=current_settings)
-    return JSONResponse(status_code=status.HTTP_201_CREATED, content=public_job_view(job))
+    view = public_job_view(job, current_settings.ARTIFACT_RETENTION_HOURS)
+    return JSONResponse(status_code=status.HTTP_201_CREATED, content=view)
 
 
 @app.get("/api/v1/creative/jobs/{job_id}")
@@ -461,7 +462,7 @@ def read_creative_job(job_id: str, request: Request) -> JSONResponse:
     current_settings = Settings()
     owner = require_owned_session(request, current_settings)
     job = get_owned_job(job_id, owner_session_id=owner, settings=current_settings)
-    return JSONResponse(content=public_job_view(job))
+    return JSONResponse(content=public_job_view(job, current_settings.ARTIFACT_RETENTION_HOURS))
 
 
 @app.delete("/api/v1/creative/jobs/{job_id}")
@@ -470,7 +471,7 @@ def cancel_creative_job(job_id: str, request: Request) -> JSONResponse:
     current_settings = Settings()
     owner = require_owned_session(request, current_settings)
     job = request_owned_cancel(job_id, owner_session_id=owner, settings=current_settings)
-    return JSONResponse(content=public_job_view(job))
+    return JSONResponse(content=public_job_view(job, current_settings.ARTIFACT_RETENTION_HOURS))
 
 
 async def read_limited_request_body(

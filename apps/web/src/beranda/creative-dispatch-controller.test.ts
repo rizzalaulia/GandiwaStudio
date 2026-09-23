@@ -20,7 +20,7 @@ describe('creative dispatch controller', () => {
       events.push('enqueue')
       return Promise.resolve({
         id: 'job-1', status: 'queued', provider_id: 'fal', model_id: 'fal-ai/flux/schnell',
-        attempt_count: 0, cancel_requested: false, created_at: '2026-09-22T00:00:00Z',
+        attempt_count: 0, artifact_expires_at: null, cancel_requested: false, created_at: '2026-09-22T00:00:00Z',
         started_at: null, completed_at: null, error_code: null, message: null, artifact: null,
       })
     })
@@ -48,7 +48,7 @@ describe('creative dispatch controller', () => {
     const behaviour: string[] = ['queued', 'running', 'needs_review']
     const job = (status: string) => ({
       id: 'job-9', status, provider_id: 'fal', model_id: 'fal-ai/flux/schnell',
-      attempt_count: 1, cancel_requested: false, created_at: '2026-09-22T00:00:00Z',
+      attempt_count: 1, artifact_expires_at: null, cancel_requested: false, created_at: '2026-09-22T00:00:00Z',
       started_at: null, completed_at: null, error_code: null, message: null, artifact: null,
     })
     const polls = vi.fn(() => Promise.resolve(job(behaviour.shift() ?? 'running')))
@@ -67,7 +67,7 @@ describe('creative dispatch controller', () => {
   it('gives up honestly when the job stays non-terminal for every attempt', async () => {
     const polls = vi.fn(() => Promise.resolve({
       id: 'job-9', status: 'running', provider_id: 'fal', model_id: 'fal-ai/flux/schnell',
-      attempt_count: 1, cancel_requested: false, created_at: '2026-09-22T00:00:00Z',
+      attempt_count: 1, artifact_expires_at: null, cancel_requested: false, created_at: '2026-09-22T00:00:00Z',
       started_at: null, completed_at: null, error_code: null, message: null, artifact: null,
     }))
     const outcome = await awaitCreativeJobOutcome({

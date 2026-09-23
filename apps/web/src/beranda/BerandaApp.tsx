@@ -23,7 +23,7 @@ import {
 import { companionHeadersForToken } from './settings-client'
 import { buildApprovedCreativeJob } from './creative-session-adapter'
 import { dispatchApprovedCreativeJob, monitorCreativeJobToRevision } from './creative-dispatch-controller'
-import { fetchCreativeJob, downloadCreativeArtifact } from './creative-job-client'
+import { fetchCreativeJob, downloadCreativeArtifact, cancelCreativeJob } from './creative-job-client'
 import { recordGeneratedRevision } from './generated-revision-store'
 import { saveCreativeSession, type CreativeSessionDirectory } from '../creative-session-store'
 
@@ -274,9 +274,12 @@ export function BerandaApp() {
   const [projectManifestSnapshot, setProjectManifestSnapshot] = useState<string | null>(null)
   const [activeProjectName, setActiveProjectName] = useState<string | null>(null)
   const [generationStatus, setGenerationStatus] = useState<{
-    state: 'idle' | 'busy' | 'queued' | 'error'
+    state: 'idle' | 'busy' | 'queued' | 'error' | 'review'
     message: string | null
   }>({ state: 'idle', message: null })
+  const [activeJobId, setActiveJobId] = useState<string | null>(null)
+  const [cancelRequested, setCancelRequested] = useState(false)
+  const [artifactExpiresAt, setArtifactExpiresAt] = useState<string | null>(null)
   const [contentType, setContentType] = useState<ContentType>('illustration')
 
   const acceptOpenedProject = useCallback((name: string, directory: DirectoryHandleLike, manifestSnapshot: string | null = null) => {
@@ -429,11 +432,29 @@ export function BerandaApp() {
           publishManifest: (next) => writeProjectManifestAtomically(projectDirectory as unknown as Parameters<typeof writeProjectManifestAtomically>[0], next),
         },
         recordOutcome: (outcome) => {
-          setGenerationStatus(
-            outcome.status === 'succeeded'
-              ? { state: 'idle', message: outcome.message }
-              : { state: 'error', message: outcome.error ?? outcome.message ?? `Job ${outcome.status}.` },
-          )
+          if (outcome.status === 'succeeded') {
+            setGenerationStatus({ state: 'idle', message: outcome.message })
+            setActiveJobId(null)
+          } else if (outcome.status === 'needs_review') {
+            setGenerationStatus({
+              state: 'review',
+              message: [outcome.message, outcome.job?.error_code ? `Kode: ${outcome.job.error_code}` : null]
+                .filter(Boolean)
+                .join(' — '),
+            })
+            setActiveJobId(null)
+          } else if (outcome.status === 'cancelled') {
+            setGenerationStatus({ state: 'idle', message: outcome.message ?? 'Job dibatalkan.' })
+            setActiveJobId(null)
+          } else {
+            setGenerationStatus({
+              state: 'error',
+              message: [outcome.error ?? outcome.message ?? `Job ${outcome.status}.`, outcome.job?.error_code ? `Kode: ${outcome.job.error_code}` : null]
+                .filter(Boolean)
+                .join(' — '),
+            })
+            setActiveJobId(null)
+          }
           return Promise.resolve()
         },
         // The UI owns the blob URL lifetime: it stays valid while displayed
@@ -445,6 +466,7 @@ export function BerandaApp() {
         setCanvasImage({ url: finished.url, width: finished.job.artifact.width, height: finished.job.artifact.height })
         setHasImage(true)
         setPublishedManifest(finished.publishedManifest)
+        setArtifactExpiresAt(finished.job.artifact_expires_at)
       } else {
         setGenerationStatus({ state: 'error', message: finished.error ?? finished.message ?? `Job berakhir ${finished.status}.` })
       }
@@ -455,6 +477,24 @@ export function BerandaApp() {
       })
     }
   }, [activeProjectName, aspectRatio, contentType, model, negativePrompt, projectDirectory, projectManifestSnapshot, prompt, tier])
+
+  const handleCancelJob = useCallback(async () => {
+    if (activeJobId === null || cancelRequested) return
+    setCancelRequested(true)
+    try {
+      await cancelCreativeJob(activeJobId)
+      setGenerationStatus((current) => ({
+        state: current.state,
+        message: 'Permintaan pembatalan terkirim — menunggu pekerja menyelesaikan dengan aman…',
+      }))
+    } catch (error) {
+      setCancelRequested(false)
+      setGenerationStatus((current) => ({
+        state: current.state,
+        message: error instanceof Error ? `Gagal membatalkan: ${error.message}` : 'Gagal membatalkan job.',
+      }))
+    }
+  }, [activeJobId, cancelRequested])
 
   // Blob URL lifecycle: revoke exactly when the displayed image is replaced
   // or the desk unmounts, so no dead blob and no leak.
@@ -683,14 +723,27 @@ export function BerandaApp() {
               </select>
             </label>
           </div>
-          <button
-            type="button"
-            className="beranda-primary beranda-submit"
-            disabled={prompt.trim().length === 0 || generationStatus.state === 'busy' || projectDirectory === null}
-            onClick={() => void handleApprovePrompt()}
-          >
-            {generationStatus.state === 'busy' ? 'Mengirim…' : t.approve}
-          </button>
+          <div className="beranda-dispatch-actions">
+            <button
+              type="button"
+              className="beranda-primary beranda-submit"
+              disabled={prompt.trim().length === 0 || generationStatus.state === 'busy' || projectDirectory === null}
+              onClick={() => void handleApprovePrompt()}
+            >
+              {generationStatus.state === 'busy' ? 'Mengirim…' : t.approve}
+            </button>
+            {generationStatus.state === 'busy' && activeJobId !== null && (
+              <button
+                type="button"
+                className="beranda-btn-test beranda-cancel-job"
+                data-testid="cancel-job"
+                disabled={cancelRequested}
+                onClick={() => void handleCancelJob()}
+              >
+                {cancelRequested ? 'Membatalkan…' : 'Batalkan job'}
+              </button>
+            )}
+          </div>
           <p role="log" data-testid="generation-flow" aria-label="Status pengiriman generasi">
             {generationStatus.message ?? 'Menunggu persetujuan prompt.'}
           </p>
@@ -727,6 +780,11 @@ export function BerandaApp() {
                 >
                   Unduh hasil ({canvasImage.width} × {canvasImage.height} px)
                 </a>
+                {artifactExpiresAt !== null && (
+                  <p data-testid="artifact-expiry" className="beranda-note">
+                    Salinan server hangus {new Date(artifactExpiresAt).toLocaleString()} — unduh sebelum itu.
+                  </p>
+                )}
               </>
             ) : (
               <p className="beranda-stage-empty">{t.stageEmpty}</p>

@@ -54,6 +54,7 @@ export type CreativeJob = Readonly<{
   completed_at: string | null
   error_code: string | null
   message: string | null
+  artifact_expires_at: string | null
   artifact: Readonly<{
     id: string
     media_type: string
@@ -93,6 +94,7 @@ function parseJob(value: unknown): CreativeJob {
     || readString(job, 'completed_at', true) === null && job.completed_at !== null
     || readString(job, 'error_code', true) === null && job.error_code !== null
     || readString(job, 'message', true) === null && job.message !== null
+    || readString(job, 'artifact_expires_at', true) === null && job.artifact_expires_at !== null
     || artifact === undefined
   ) throw new Error('Respons job kreatif tidak valid.')
   return {
@@ -107,6 +109,7 @@ function parseJob(value: unknown): CreativeJob {
     completed_at: readString(job, 'completed_at', true),
     error_code: readString(job, 'error_code', true),
     message: readString(job, 'message', true),
+    artifact_expires_at: readString(job, 'artifact_expires_at', true),
     artifact,
   }
 }

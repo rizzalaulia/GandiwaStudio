@@ -8,6 +8,7 @@ it never persists project/session documents or exposes queue parameters.
 from __future__ import annotations
 
 import re
+from datetime import timedelta
 from typing import Any
 
 from fastapi import HTTPException, Request, status
@@ -105,8 +106,14 @@ def request_owned_cancel(job_id: str, *, owner_session_id: str, settings: Settin
         ) from None
 
 
-def public_job_view(job: QueueJob) -> dict[str, object]:
-    """Whitelisted public job state; queue parameters and provider IDs stay private."""
+def public_job_view(
+    job: QueueJob, artifact_retention_hours: int | None = None
+) -> dict[str, object]:
+    """Whitelisted public job state; queue parameters and provider IDs stay private.
+
+    artifact_retention_hours (Issue #26: artifact expiry shown) lets callers
+    disclose when a finished artifact will be deleted: completed_at + retention.
+    """
     artifact: dict[str, object] | None = None
     if isinstance(job.result_manifest, dict):
         raw = job.result_manifest.get("artifact")
@@ -133,6 +140,11 @@ def public_job_view(job: QueueJob) -> dict[str, object]:
                     "width": width,
                     "height": height,
                 }
+    artifact_expires_at = (
+        (job.completed_at + timedelta(hours=artifact_retention_hours)).isoformat()
+        if job.completed_at is not None and artifact_retention_hours is not None
+        else None
+    )
     return {
         "id": job.id,
         "status": job.status,
@@ -146,4 +158,5 @@ def public_job_view(job: QueueJob) -> dict[str, object]:
         "error_code": job.error_code,
         "message": job.redacted_error,
         "artifact": artifact,
+        "artifact_expires_at": artifact_expires_at,
     }

@@ -50,7 +50,7 @@ describe('creative job client', () => {
       const url = input instanceof URL ? input.href : typeof input === 'string' ? input : input.url
       if (url.endsWith('/api/v1/creative/bootstrap')) return Promise.resolve({ ok: true, status: 200 })
       if (url.endsWith('/api/v1/auth/csrf')) return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ csrf_token: 'csrf-1' }) })
-      if (url.endsWith('/api/v1/creative/jobs')) return Promise.resolve({ ok: true, status: 201, json: () => Promise.resolve({ id: 'job-1', status: 'queued', provider_id: 'fal', model_id: 'fal-ai/flux/schnell', attempt_count: 0, cancel_requested: false, created_at: '2026-09-22T00:00:00+00:00', started_at: null, completed_at: null, error_code: null, message: null, artifact: null }) })
+      if (url.endsWith('/api/v1/creative/jobs')) return Promise.resolve({ ok: true, status: 201, json: () => Promise.resolve({ id: 'job-1', status: 'queued', provider_id: 'fal', model_id: 'fal-ai/flux/schnell', attempt_count: 0, artifact_expires_at: null, cancel_requested: false, created_at: '2026-09-22T00:00:00+00:00', started_at: null, completed_at: null, error_code: null, message: null, artifact: null }) })
       return Promise.reject(new Error(`unexpected request: ${url} ${init?.method ?? 'GET'}`))
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -74,7 +74,7 @@ describe('creative job client', () => {
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
       ok: true,
       status: 200,
-      json: () => Promise.resolve({ id: 'job-review', status: 'needs_review', provider_id: 'fal', model_id: 'fal-ai/flux/schnell', attempt_count: 1, cancel_requested: false, created_at: '2026-09-22T00:00:00+00:00', started_at: '2026-09-22T00:01:00+00:00', completed_at: '2026-09-22T00:02:00+00:00', error_code: 'UNKNOWN_PROVIDER_OUTCOME', message: 'Provider outcome needs review', artifact: null }),
+      json: () => Promise.resolve({ id: 'job-review', status: 'needs_review', provider_id: 'fal', model_id: 'fal-ai/flux/schnell', attempt_count: 1, artifact_expires_at: null, cancel_requested: false, created_at: '2026-09-22T00:00:00+00:00', started_at: '2026-09-22T00:01:00+00:00', completed_at: '2026-09-22T00:02:00+00:00', error_code: 'UNKNOWN_PROVIDER_OUTCOME', message: 'Provider outcome needs review', artifact: null }),
     })))
 
     const job = await fetchCreativeJob('job-review')

@@ -152,7 +152,11 @@ async def test_creative_job_enqueues_only_an_exact_human_approved_snapshot(
             headers={"X-CSRF-Token": csrf},
         )
         assert cancelled.status_code == 200
-        assert cancelled.json()["cancel_requested"] is True
+        cancelled_view = cancelled.json()
+        assert cancelled_view["cancel_requested"] is True
+        # Issue #26 AC (artifact expiry shown): queued/cancelled tanpa completed_at
+        # tidak boleh mengklaim kedaluwarsa; field tetap ada & null.
+        assert cancelled_view["artifact_expires_at"] is None
 
         queue = QueueStore(create_sqlite_engine(Settings()))
         assert queue.get(str(job["id"])).cancel_requested_at is not None
@@ -210,3 +214,42 @@ async def test_creative_job_refuses_unapproved_snapshot_before_queue_write(
         assert "approval" in response.json()["detail"].lower()
         queue = QueueStore(create_sqlite_engine(Settings()))
         assert queue.claim_next("worker", lease_seconds=30) is None
+
+
+def test_public_job_view_discloses_artifact_expiry_when_completed() -> None:
+    """Issue #26 AC: artifact expiry shown = completed_at + retention hours."""
+    from datetime import UTC, datetime, timedelta
+
+    from gandiwa_api.creative.http_api import public_job_view
+    from gandiwa_api.queue import QueueJob
+
+    completed = datetime(2026, 9, 23, 12, 0, 0, tzinfo=UTC)
+    job = QueueJob(
+        id="job-exp",
+        job_type="image_generation",
+        status="succeeded",
+        priority=0,
+        provider_id="fal",
+        model_id="fal-ai/flux/dev",
+        ruleset_snapshot_id=None,
+        parameters={},
+        attempt_count=1,
+        remote_job_id=None,
+        lease_owner=None,
+        lease_expires_at=None,
+        heartbeat_at=None,
+        cancel_requested_at=None,
+        created_at=completed,
+        started_at=completed,
+        completed_at=completed,
+        error_code=None,
+        redacted_error=None,
+        result_manifest={"artifact": {
+            "id": "art-1", "media_type": "image/png", "size_bytes": 10,
+            "sha256": "a" * 64, "width": 16, "height": 16,
+        }},
+    )
+    view = public_job_view(job, artifact_retention_hours=24)
+    assert view["artifact_expires_at"] == (completed + timedelta(hours=24)).isoformat()
+    # Tanpa retention → tidak mengklaim expiry.
+    assert public_job_view(job)["artifact_expires_at"] is None
