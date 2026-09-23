@@ -51,6 +51,9 @@ function formatRoute(contentType: CreativeSessionSidecar['prompt']['contentType'
   submission_format: 'png' | 'jpeg' | 'svg'
 } {
   if (contentType === 'vector') {
+    if (extension !== 'svg') {
+      throw new Error('vector revision requires an SVG artifact; raster output cannot be relabelled')
+    }
     return { generation_format: 'svg', working_format: 'svg', master_format: 'svg', submission_format: 'svg' }
   }
   if (extension === 'png') {

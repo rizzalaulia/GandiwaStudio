@@ -244,10 +244,16 @@ def test_public_job_view_discloses_artifact_expiry_when_completed() -> None:
         completed_at=completed,
         error_code=None,
         redacted_error=None,
-        result_manifest={"artifact": {
-            "id": "art-1", "media_type": "image/png", "size_bytes": 10,
-            "sha256": "a" * 64, "width": 16, "height": 16,
-        }},
+        result_manifest={
+            "artifact": {
+                "id": "art-1",
+                "media_type": "image/png",
+                "size_bytes": 10,
+                "sha256": "a" * 64,
+                "width": 16,
+                "height": 16,
+            }
+        },
     )
     view = public_job_view(job, artifact_retention_hours=24)
     assert view["artifact_expires_at"] == (completed + timedelta(hours=24)).isoformat()

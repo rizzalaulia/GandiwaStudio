@@ -293,6 +293,16 @@ def list_providers() -> list[ProviderInfo]:
         providers = [
             p if p.id != "fal" else p.model_copy(update={"configured": True}) for p in providers
         ]
+    stored_router_key = store.get("9router")
+    router_providers = [provider for provider in providers if provider.id != "fal"]
+    if stored_router_key and len(router_providers) == 1:
+        router_id = router_providers[0].id
+        providers = [
+            provider
+            if provider.id != router_id
+            else provider.model_copy(update={"configured": True})
+            for provider in providers
+        ]
     return providers
 
 

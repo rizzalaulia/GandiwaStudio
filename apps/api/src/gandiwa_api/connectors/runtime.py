@@ -219,9 +219,15 @@ def build_generation_registry(
     artifact_downloader: Any,
     artifact_store: ArtifactStore,
     origin_validator: Callable[[str], object] = validate_fal_base_url,
+    api_key: str | None = None,
 ) -> ConnectorRegistry:
-    """Build the one fixed fal generator, or fail closed with an empty registry."""
-    api_key = settings.fal_api_key()
+    """Build the one fixed fal generator, or fail closed with an empty registry.
+
+    ``api_key`` is the encrypted Settings-store override. Environment config
+    remains the deployment fallback, but both UI validation and worker dispatch
+    can now consume the same credential authority.
+    """
+    api_key = api_key or settings.fal_api_key()
     if not api_key or base_transport is None:
         return ConnectorRegistry({})
     try:

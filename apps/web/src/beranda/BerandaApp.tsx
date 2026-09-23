@@ -235,14 +235,8 @@ export function BerandaApp() {
   const [keyTest, setKeyTest] = useState<{ provider: string; note: string; level: 'ok' | 'rejected' | 'unreachable' | 'error' } | null>(null)
   const [testingProvider, setTestingProvider] = useState<'fal' | '9router' | null>(null)
 
-  const [imageApi, setImageApi] = useState<'fal' | 'openai-sunburst'>('fal')
-  const [imageModel, setImageModel] = useState('fal-ai/flux/schnell')
-  const [reasoningApi, setReasoningApi] = useState<'9router' | 'openai-compatible' | 'anthropic-compatible'>('9router')
-  const [reasoningModel, setReasoningModel] = useState('provider-managed')
   const [newFalKey, setNewFalKey] = useState('')
   const [newRouterKey, setNewRouterKey] = useState('')
-  const [newOpenAiKey, setNewOpenAiKey] = useState('')
-  const [newAnthropicKey, setNewAnthropicKey] = useState('')
 
   const t: Strings = STRINGS[lang]
 
@@ -423,7 +417,14 @@ export function BerandaApp() {
         jobId: job.id,
         fetchJob: fetchCreativeJob,
         delay: (ms) => new Promise((resolve) => { window.setTimeout(resolve, ms) }),
-        maxAttempts: 60,
+        maxAttempts: 300,
+        onProgress: (currentJob) => {
+          const cancelNote = currentJob.cancel_requested ? ' · pembatalan diminta' : ''
+          setGenerationStatus({
+            state: 'busy',
+            message: `Job ${currentJob.id}: ${currentJob.status} · percobaan ${currentJob.attempt_count}${cancelNote}`,
+          })
+        },
         fetchArtifact: downloadCreativeArtifact,
         recordRevision: recordGeneratedRevision,
         recordInput: {
@@ -609,6 +610,19 @@ export function BerandaApp() {
     [keywords],
   )
   const providerRows = status?.providers ?? []
+  const falConfigured = providerRows.some((entry) => entry.provider === 'fal' && entry.configured)
+  const generationRuntimeReady = contentType !== 'vector' && status?.backend.ready === true && status.worker.status === 'running' && falConfigured
+  const generationBlockReason = contentType === 'vector'
+    ? 'Generate diblokir: fal.ai menghasilkan raster PNG/JPEG, bukan master SVG untuk proyek Vector.'
+    : status === null
+      ? 'Memeriksa kesiapan backend…'
+      : status.backend.ready !== true
+      ? 'Generate diblokir: database, antrean, atau penyimpanan artefak belum siap.'
+      : status.worker.status !== 'running'
+        ? 'Generate diblokir: worker belum berjalan.'
+        : !falConfigured
+          ? 'Generate diblokir: simpan dan tes kunci fal.ai terlebih dahulu.'
+          : null
 
   return (
     <div className={`beranda ${theme === 'night' ? 'beranda-night' : ''}`}>
@@ -729,7 +743,7 @@ export function BerandaApp() {
             <button
               type="button"
               className="beranda-primary beranda-submit"
-              disabled={prompt.trim().length === 0 || generationStatus.state === 'busy' || projectDirectory === null}
+              disabled={prompt.trim().length === 0 || generationStatus.state === 'busy' || projectDirectory === null || !generationRuntimeReady}
               onClick={() => void handleApprovePrompt()}
             >
               {generationStatus.state === 'busy' ? 'Mengirim…' : t.approve}
@@ -747,7 +761,7 @@ export function BerandaApp() {
             )}
           </div>
           <p role="log" data-testid="generation-flow" aria-label="Status pengiriman generasi">
-            {generationStatus.message ?? 'Menunggu persetujuan prompt.'}
+            {generationStatus.message ?? generationBlockReason ?? 'Menunggu persetujuan prompt.'}
           </p>
         </section>
 
@@ -784,7 +798,7 @@ export function BerandaApp() {
                 </a>
                 {artifactExpiresAt !== null && (
                   <p data-testid="artifact-expiry" className="beranda-note">
-                    Salinan server hangus {new Date(artifactExpiresAt).toLocaleString()} — unduh sebelum itu.
+                    Revisi sudah tersimpan di proyek lokal. Salinan server sementara berakhir {new Date(artifactExpiresAt).toLocaleString()}.
                   </p>
                 )}
               </>
@@ -962,42 +976,33 @@ export function BerandaApp() {
               <section className="beranda-api-role" aria-label="Image generation">
                 <div className="beranda-api-role-head"><strong>Image generation</strong><span>1 gambar / job</span></div>
                 <label className="beranda-field"><span>API</span>
-                  <select aria-label="API image generation" value={imageApi} onChange={(event) => {
-                    const next = event.target.value as typeof imageApi
-                    setImageApi(next)
-                    setImageModel(next === 'fal' ? 'fal-ai/flux/schnell' : 'gpt-2.5-sunburst')
-                  }}>
-                    <option value="fal">fal.ai</option>
-                    <option value="openai-sunburst">OpenAI · gpt-2.5-sunburst</option>
+                  <select aria-label="API image generation" value="fal" disabled>
+                    <option value="fal">fal.ai · aktif</option>
+                    <option value="openai-sunburst" disabled>OpenAI · gpt-2.5-sunburst · belum tersedia</option>
                   </select>
                 </label>
                 <label className="beranda-field"><span>Model</span>
-                  <select aria-label="Model image generation" value={imageModel} onChange={(event) => setImageModel(event.target.value)}>
-                    {imageApi === 'fal' ? <>
-                      <option value="fal-ai/flux/schnell">FLUX Schnell</option><option value="fal-ai/flux/dev">FLUX Dev</option><option value="fal-ai/flux-realism">FLUX Realism</option><option value="fal-ai/imagen">Imagen</option><option value="fal-ai/sdxl">SDXL</option>
-                    </> : <option value="gpt-2.5-sunburst">gpt-2.5-sunburst</option>}
+                  <select aria-label="Model image generation" value={model} onChange={(event) => setModel(event.target.value)}>
+                    {MODEL_OPTIONS.map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
                   </select>
                 </label>
-                {imageApi === 'fal' ? <ProviderKeyRow provider="fal" label="fal.ai" value={newFalKey} onChange={setNewFalKey} configured={providerRows.find((entry) => entry.provider === 'fal')?.configured === true} saveProviderKey={saveProviderKey} validateProviderKey={validateProviderKey} testing={testingProvider === 'fal'} keyTest={keyTest} t={t} /> : <ProviderKeyRow provider="openai" label="OpenAI" value={newOpenAiKey} onChange={setNewOpenAiKey} configured={false} unavailable t={t} />}
+                <ProviderKeyRow provider="fal" label="fal.ai" value={newFalKey} onChange={setNewFalKey} configured={providerRows.find((entry) => entry.provider === 'fal')?.configured === true} saveProviderKey={saveProviderKey} validateProviderKey={validateProviderKey} testing={testingProvider === 'fal'} keyTest={keyTest} t={t} />
               </section>
 
               <section className="beranda-api-role" aria-label="Reasoning">
                 <div className="beranda-api-role-head"><strong>Reasoning</strong><span>prompt & metadata</span></div>
                 <label className="beranda-field"><span>API</span>
-                  <select aria-label="API reasoning" value={reasoningApi} onChange={(event) => {
-                    const next = event.target.value as typeof reasoningApi
-                    setReasoningApi(next)
-                    setReasoningModel(next === '9router' ? 'provider-managed' : 'choose-after-connector')
-                  }}>
-                    <option value="9router">9Router</option><option value="openai-compatible">OpenAI compatible</option><option value="anthropic-compatible">Anthropic compatible</option>
+                  <select aria-label="API reasoning" value="9router" disabled>
+                    <option value="9router">9Router · credential saja</option>
                   </select>
                 </label>
                 <label className="beranda-field"><span>Model</span>
-                  <select aria-label="Model reasoning" value={reasoningModel} onChange={(event) => setReasoningModel(event.target.value)}>
-                    <option value="provider-managed">Pilih model dari 9Router</option><option value="choose-after-connector">Pilih setelah connector tersedia</option>
+                  <select aria-label="Model reasoning" value="assistant-pending" disabled>
+                    <option value="assistant-pending">Assistant workflow belum tersedia</option>
                   </select>
                 </label>
-                {reasoningApi === '9router' ? <ProviderKeyRow provider="9router" label="9Router" value={newRouterKey} onChange={setNewRouterKey} configured={providerRows.find((entry) => entry.provider === '9router')?.configured === true} saveProviderKey={saveProviderKey} validateProviderKey={validateProviderKey} testing={testingProvider === '9router'} keyTest={keyTest} t={t} /> : <ProviderKeyRow provider={reasoningApi === 'openai-compatible' ? 'openai' : 'anthropic'} label={reasoningApi === 'openai-compatible' ? 'OpenAI compatible' : 'Anthropic compatible'} value={reasoningApi === 'openai-compatible' ? newOpenAiKey : newAnthropicKey} onChange={reasoningApi === 'openai-compatible' ? setNewOpenAiKey : setNewAnthropicKey} configured={false} unavailable t={t} />}
+                <p className="beranda-note">Kunci dapat disimpan dan diuji, tetapi brainstorm/metadata assistant belum tersambung ke Beranda.</p>
+                <ProviderKeyRow provider="9router" label="9Router" value={newRouterKey} onChange={setNewRouterKey} configured={providerRows.find((entry) => entry.provider === '9router')?.configured === true} saveProviderKey={saveProviderKey} validateProviderKey={validateProviderKey} testing={testingProvider === '9router'} keyTest={keyTest} t={t} />
               </section>
               {settingsNote && <p role="status" className="beranda-note">{settingsNote}</p>}
             </fieldset>

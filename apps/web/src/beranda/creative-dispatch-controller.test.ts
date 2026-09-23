@@ -64,19 +64,18 @@ describe('creative dispatch controller', () => {
     expect(pauses).toEqual([1_000, 1_000])
   })
 
-  it('gives up honestly when the job stays non-terminal for every attempt', async () => {
+  it('pauses monitoring honestly when the job stays non-terminal for every attempt', async () => {
     const polls = vi.fn(() => Promise.resolve({
       id: 'job-9', status: 'running', provider_id: 'fal', model_id: 'fal-ai/flux/schnell',
       attempt_count: 1, artifact_expires_at: null, cancel_requested: false, created_at: '2026-09-22T00:00:00Z',
       started_at: null, completed_at: null, error_code: null, message: null, artifact: null,
     }))
-    const outcome = await awaitCreativeJobOutcome({
+    await expect(awaitCreativeJobOutcome({
       jobId: 'job-9',
       fetchJob: polls,
       delay: () => Promise.resolve(),
       maxAttempts: 4,
-    })
-    expect(outcome.status).toBe('running')
+    })).rejects.toThrow(/masih berjalan di backend/)
     expect(polls).toHaveBeenCalledTimes(4)
   })
 

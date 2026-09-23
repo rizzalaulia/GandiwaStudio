@@ -139,7 +139,7 @@ vi.mock('./status-client', () => ({
       version: '0.0.0',
       mvp_version: 'mvp-1.0',
       backend: { health: 'ok', ready: true, checks: {} },
-      worker: { status: 'idle', heartbeat_at: null },
+      worker: { status: 'running', heartbeat_at: '2026-09-23T00:00:00Z' },
       providers: [
         { provider: 'fal', configured: true, testable: true },
         { provider: '9router', configured: true, testable: true },
@@ -459,28 +459,30 @@ describe('Beranda — setelan: bahasa & API key', () => {
     expect(dialog).toHaveTextContent('Image generation')
     expect(screen.getByLabelText('API image generation')).toHaveValue('fal')
     expect(screen.getByLabelText('Model image generation')).toHaveValue('fal-ai/flux/schnell')
-    expect(screen.getByRole('option', { name: 'OpenAI · gpt-2.5-sunburst' })).toBeVisible()
+    expect(screen.getByRole('option', { name: 'OpenAI · gpt-2.5-sunburst · belum tersedia' })).toBeDisabled()
 
     expect(dialog).toHaveTextContent('Reasoning')
     expect(screen.getByLabelText('API reasoning')).toHaveValue('9router')
-    expect(screen.getByRole('option', { name: 'OpenAI compatible' })).toBeVisible()
-    expect(screen.getByRole('option', { name: 'Anthropic compatible' })).toBeVisible()
+    expect(screen.getByLabelText('API reasoning')).toBeDisabled()
+    expect(screen.getByLabelText('Model reasoning')).toHaveValue('assistant-pending')
+    expect(dialog).toHaveTextContent(/assistant belum tersambung/i)
   })
 
-  it('switches the image model selector with the selected API', () => {
+  it('keeps unsupported image providers fail-closed and shares the desk model', () => {
     render(<BerandaApp />)
     fireEvent.click(screen.getByRole('button', { name: 'Setelan' }))
-    fireEvent.change(screen.getByLabelText('API image generation'), { target: { value: 'openai-sunburst' } })
-    expect(screen.getByLabelText('Model image generation')).toHaveValue('gpt-2.5-sunburst')
-    expect(screen.getByLabelText('Kunci baru OpenAI')).toBeVisible()
+    expect(screen.getByLabelText('API image generation')).toBeDisabled()
+    fireEvent.change(screen.getByLabelText('Model image generation'), { target: { value: 'fal-ai/flux/dev' } })
+    expect(screen.getByLabelText('Model gambar')).toHaveValue('fal-ai/flux/dev')
+    expect(screen.getByLabelText('Kunci baru fal.ai')).toBeVisible()
   })
 
-  it('keeps save honest for an API whose backend connector is not available', () => {
+  it('labels the not-yet-wired reasoning workflow honestly', () => {
     render(<BerandaApp />)
     fireEvent.click(screen.getByRole('button', { name: 'Setelan' }))
-    fireEvent.change(screen.getByLabelText('API reasoning'), { target: { value: 'anthropic-compatible' } })
-    expect(screen.getByText(/Connector backend belum tersedia/i)).toBeVisible()
-    expect(screen.getByRole('button', { name: 'Simpan Anthropic compatible' })).toBeDisabled()
+    expect(screen.getByText(/brainstorm\/metadata assistant belum tersambung/i)).toBeVisible()
+    expect(screen.getByLabelText('API reasoning')).toBeDisabled()
+    expect(screen.getByLabelText('Model reasoning')).toBeDisabled()
   })
 
   it('saves a new key through the companion-token envelope', async () => {
@@ -521,7 +523,7 @@ describe('Beranda — setelan: bahasa & API key', () => {
       if (url.endsWith('/api/v1/status')) {
         return Promise.resolve({
           ok: true, status: 200,
-          json: () => Promise.resolve({ backend: { health: 'ok', ready: true }, worker: { status: 'idle', heartbeat_at: null } }),
+          json: () => Promise.resolve({ backend: { health: 'ok', ready: true }, worker: { status: 'running', heartbeat_at: '2026-09-23T00:00:00Z' } }),
         })
       }
       if (url.endsWith('/api/v1/providers')) {

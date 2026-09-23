@@ -61,6 +61,7 @@ export type AwaitCreativeJobOutcomeInput = Readonly<{
   fetchJob: (jobId: string) => Promise<CreativeJob>
   delay: (ms: number) => Promise<void>
   maxAttempts: number
+  onProgress?: (job: CreativeJob) => void
 }>
 
 const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled', 'needs_review'])
@@ -70,9 +71,10 @@ export async function awaitCreativeJobOutcome(input: AwaitCreativeJobOutcomeInpu
   for (let attempt = 0; attempt < input.maxAttempts; attempt += 1) {
     if (attempt > 0) await input.delay(1_000)
     last = await input.fetchJob(input.jobId)
+    input.onProgress?.(last)
     if (TERMINAL_STATUSES.has(last.status)) return last
   }
-  return last as CreativeJob
+  throw new Error(`Pemantauan job ${input.jobId} berhenti sementara setelah ${input.maxAttempts} percobaan; job masih berjalan di backend.`)
 }
 
 export type MonitorCreativeJobToRevisionInput = Readonly<{
@@ -80,6 +82,7 @@ export type MonitorCreativeJobToRevisionInput = Readonly<{
   fetchJob: (jobId: string) => Promise<CreativeJob>
   delay: (ms: number) => Promise<void>
   maxAttempts: number
+  onProgress?: (job: CreativeJob) => void
   awaitOutcome?: typeof awaitCreativeJobOutcome
   fetchArtifact: (artifactId: string) => Promise<Readonly<{ bytes: Uint8Array; sha256Header: string }>>
   recordRevision: typeof recordGeneratedRevision
@@ -117,6 +120,7 @@ export async function monitorCreativeJobToRevision(input: MonitorCreativeJobToRe
     fetchJob: input.fetchJob,
     delay: input.delay,
     maxAttempts: input.maxAttempts,
+    ...(input.onProgress ? { onProgress: input.onProgress } : {}),
   })
   let outcome: CreativeJobRevisionOutcome
   if (finished.status === 'succeeded' && finished.artifact !== null) {
