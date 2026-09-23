@@ -63,12 +63,16 @@ describe('providerSettingsView', () => {
     await expect(providerSettingsView.save({ csrfToken: 'tok', payload: payload() })).rejects.toThrow('403')
   })
 
-  it('exposes the health-check call for the test-connection buttons', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 })
+  it('uses the real provider-auth validation verdict for test buttons', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ ok: true, provider: '9router', probe: 'provider_auth' }),
+    })
     vi.stubGlobal('fetch', fetchMock)
     const result = await providerSettingsView.testConnection('9router', 'inst-1')
     const [url] = fetchMock.mock.calls[0] as [string]
-    expect(url).toBe('/api/v1/settings/providers/9router/test?instance=inst-1')
+    expect(url).toBe('/api/v1/settings/providers/9router/validate')
     expect(result.ok).toBe(true)
   })
 })

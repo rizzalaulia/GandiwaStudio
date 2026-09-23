@@ -46,9 +46,13 @@ async function save(args: { csrfToken: string; payload: ProviderSettingsPayload 
 }
 
 async function testConnection(provider: ProviderName, instance?: string): Promise<{ ok: boolean }> {
-  const suffix = instance ? `?instance=${encodeURIComponent(instance)}` : ''
-  const response = await fetch(`/api/v1/settings/providers/${provider}/test${suffix}`)
-  return { ok: response.ok }
+  void instance // Legacy caller compatibility; validation is provider-scoped.
+  const response = await fetch(`/api/v1/settings/providers/${provider}/validate`, {
+    credentials: 'same-origin',
+  })
+  if (!response.ok) return { ok: false }
+  const body = (await response.json()) as { ok?: unknown }
+  return { ok: body.ok === true }
 }
 
 export type ProviderSettingsViewFn = ((

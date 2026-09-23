@@ -15,6 +15,7 @@ import os
 import httpx
 import pytest
 
+from gandiwa_api import main as api_main
 from gandiwa_api.config import Settings
 from gandiwa_api.main import app as real_app
 
@@ -165,6 +166,7 @@ async def test_companion_token_accepted_where_csrf_header_was_required(
 async def test_test_connection_endpoint_is_honest(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("GANDIWA_PROVIDER_KEY_STORE", str(tmp_path / "provider-keys.json"))
     monkeypatch.setenv("GANDIWA_SESSION_SECRET", "test-secret")
+    monkeypatch.setattr(api_main, "_probe_provider_auth", lambda _provider, _key: (True, None))
     _settings(tmp_path)
     transport = httpx.ASGITransport(app=real_app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:

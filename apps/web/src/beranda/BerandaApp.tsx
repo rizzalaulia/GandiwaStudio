@@ -274,6 +274,7 @@ export function BerandaApp() {
   const [activeJobId, setActiveJobId] = useState<string | null>(null)
   const [cancelRequested, setCancelRequested] = useState(false)
   const [artifactExpiresAt, setArtifactExpiresAt] = useState<string | null>(null)
+  const [activeAssetId, setActiveAssetId] = useState<string | null>(null)
   const [contentType, setContentType] = useState<ContentType>('illustration')
 
   const acceptOpenedProject = useCallback((name: string, directory: DirectoryHandleLike, manifestSnapshot: string | null = null) => {
@@ -281,6 +282,7 @@ export function BerandaApp() {
     setRememberedProject(directory)
     setProjectDirectory(directory)
     setActiveProjectName(name)
+    setActiveAssetId(null)
     if (manifestSnapshot !== null) setProjectManifestSnapshot(manifestSnapshot)
     setProjectMessage(`${name} dibuka secara lokal.`)
   }, [])
@@ -328,6 +330,7 @@ export function BerandaApp() {
         setRememberedProject(remembered ?? null)
         setProjectDirectory(remembered ?? null)
         setActiveProjectName(result.projectName)
+        setActiveAssetId(null)
         setProjectManifestSnapshot(null)
         setProjectMessage(`Proyek “${result.projectName}” dibuat secara lokal.`)
         setCreateProjectOpen(false)
@@ -382,8 +385,10 @@ export function BerandaApp() {
         throw new Error('Snapshot manifest proyek belum tersedia.')
       }
       const generationTarget = resolutionForTier(tier, aspectRatio)
+      const sessionId = crypto.randomUUID()
+      const targetAssetId = activeAssetId ?? sessionId
       const approved = await buildApprovedCreativeJob({
-        sessionId: crypto.randomUUID(),
+        sessionId,
         topic: activeProjectName,
         prompt,
         negativePrompt,
@@ -431,6 +436,7 @@ export function BerandaApp() {
           directory: sessionDirectory,
           manifestSnapshot,
           persistedSession: persisted,
+          assetId: targetAssetId,
           saveSidecar: saveCreativeSession,
           publishManifest: (next) => writeProjectManifestAtomically(projectDirectory as unknown as Parameters<typeof writeProjectManifestAtomically>[0], next),
         },
@@ -469,6 +475,10 @@ export function BerandaApp() {
         setCanvasImage({ url: finished.url, width: finished.job.artifact.width, height: finished.job.artifact.height })
         setHasImage(true)
         setPublishedManifest(finished.publishedManifest)
+        if (finished.publishedManifest !== null) {
+          setProjectManifestSnapshot(`${JSON.stringify(finished.publishedManifest, null, 2)}\n`)
+        }
+        setActiveAssetId(targetAssetId)
         setArtifactExpiresAt(finished.job.artifact_expires_at)
       } else {
         setGenerationStatus({ state: 'error', message: finished.error ?? finished.message ?? `Job berakhir ${finished.status}.` })
@@ -479,7 +489,7 @@ export function BerandaApp() {
         message: error instanceof Error ? error.message : 'Pengiriman job gagal.',
       })
     }
-  }, [activeProjectName, aspectRatio, contentType, model, negativePrompt, projectDirectory, projectManifestSnapshot, prompt, tier])
+  }, [activeAssetId, activeProjectName, aspectRatio, contentType, model, negativePrompt, projectDirectory, projectManifestSnapshot, prompt, tier])
 
   const handleCancelJob = useCallback(async () => {
     if (activeJobId === null || cancelRequested) return

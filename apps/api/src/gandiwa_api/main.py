@@ -355,13 +355,8 @@ def provider_settings_state() -> list[dict[str, object]]:
 
 @app.get("/api/v1/settings/providers/{provider}/test")
 def test_provider_connection(provider: str) -> JSONResponse:
-    """Honest smoke probe: verifies stored key presence and provider registry."""
-    if provider not in _SETTINGS_PROVIDERS:
-        raise HTTPException(status_code=404, detail="unknown provider")
-    current_settings = Settings()
-    store = ProviderKeyStore(current_settings)
-    key = store.get(provider)
-    return JSONResponse(content={"ok": key is not None, "provider": provider})
+    """Compatibility alias for the real upstream authentication probe."""
+    return validate_provider_key(provider)
 
 
 _PROBE_REQUEST_ID = "00000000-0000-0000-0000-000000000000"

@@ -19,6 +19,7 @@ export type RecordGeneratedRevisionInput = Readonly<{
   directory: CreativeSessionDirectory
   manifestSnapshot: string
   persistedSession: LoadedCreativeSession
+  assetId?: string
   jobId: string
   artifact: GeneratedRevisionArtifact
   fetchArtifact: (artifactId: string) => Promise<Readonly<{ bytes: Uint8Array; sha256Header: string }>>
@@ -87,13 +88,17 @@ export async function recordGeneratedRevision(input: RecordGeneratedRevisionInpu
   const contentType = session.prompt.contentType
   const extension = EXTENSIONS[declared.media_type]
   if (extension === undefined) throw new Error(`unsupported artifact media type: ${declared.media_type}`)
+  // Format compatibility is a pre-write gate. A raster fal artifact for a
+  // Vector session must fail before any durable file is created.
+  const formats = formatRoute(contentType, extension)
 
-  const asset = manifest.assets.find((entry) => entry.asset_id === session.sessionId)
+  const assetId = input.assetId ?? session.sessionId
+  const asset = manifest.assets.find((entry) => entry.asset_id === assetId)
   const nextRevisionNumber = asset ? Math.max(...asset.revisions.map((entry) => entry.revision)) + 1 : 1
-  const relativePath = `revisions/${session.sessionId}/rev-${nextRevisionNumber}.${extension}`
+  const relativePath = `revisions/${assetId}/rev-${nextRevisionNumber}.${extension}`
 
   const revisionsDir = await input.directory.getDirectoryHandle('revisions', { create: true })
-  const assetDir = await revisionsDir.getDirectoryHandle(session.sessionId, { create: true })
+  const assetDir = await revisionsDir.getDirectoryHandle(assetId, { create: true })
   const fileName = `rev-${nextRevisionNumber}.${extension}`
   try {
     await assetDir.getFileHandle(fileName, { create: false })
@@ -116,13 +121,13 @@ export async function recordGeneratedRevision(input: RecordGeneratedRevisionInpu
 
   const revision: ProjectRevision = {
     revision: nextRevisionNumber,
-    ...formatRoute(contentType, extension),
+    ...formats,
     relative_path: relativePath,
   }
-  const nextAssets = manifest.assets.some((entry) => entry.asset_id === session.sessionId)
-    ? manifest.assets.map((entry) => entry.asset_id === session.sessionId ? { ...entry, revisions: [...entry.revisions, revision] } : entry)
+  const nextAssets = manifest.assets.some((entry) => entry.asset_id === assetId)
+    ? manifest.assets.map((entry) => entry.asset_id === assetId ? { ...entry, revisions: [...entry.revisions, revision] } : entry)
     : [...manifest.assets, {
-      asset_id: session.sessionId,
+      asset_id: assetId,
       content_type: contentType,
       creation_method: session.prompt.creationMethod,
       revisions: [revision],
