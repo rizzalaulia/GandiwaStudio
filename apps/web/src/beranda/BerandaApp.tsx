@@ -77,7 +77,7 @@ const STRINGS = {
     targetPixels: 'Target piksel',
     ratioWord: 'rasio',
     kandidatEmpty: 'Belum ada kandidat — 1 generate = 1 gambar, hasil terakhir menempel di strip ini dengan piksel aktualnya.',
-    keyConfigured: 'terpasang',
+    keyConfigured: 'tersimpan',
     keyMissing: 'belum ada key',
     keyPlaceholder: 'Tempel kunci API baru di sini',
     keyNote: 'Kunci hanya disimpan di backend, tidak pernah tampil utuh kembali.',
@@ -127,7 +127,7 @@ const STRINGS = {
     targetPixels: 'Target pixels',
     ratioWord: 'ratio',
     kandidatEmpty: 'No candidates yet — 1 generate = 1 image; the latest result lands in this strip with its actual pixels.',
-    keyConfigured: 'configured',
+    keyConfigured: 'stored',
     keyMissing: 'no key',
     keyPlaceholder: 'Paste a new API key here',
     keyNote: 'Keys are stored server-side only and are never shown back in full.',
@@ -791,7 +791,7 @@ export function BerandaApp() {
               </span>
               {providerRows.length > 0 ? providerRows.map((provider) => (
                 <span key={provider.provider} className={`beranda-system-item ${provider.configured ? 'beranda-system-ok' : ''}`}>
-                  <b>{providerLabel(provider.provider)}</b><small>{provider.configured ? t.ready : t.noKey}</small>
+                  <b>{providerLabel(provider.provider)}</b><small>{provider.configured ? t.keyConfigured : t.noKey}</small>
                 </span>
               )) : (
                 <span className="beranda-system-item"><b>{t.provider}</b><small>{status ? t.empty : '…'}</small></span>
