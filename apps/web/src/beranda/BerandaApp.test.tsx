@@ -514,6 +514,56 @@ describe('Beranda — setelan: bahasa & API key', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Simpan 9Router' }))
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('404'))
   })
+
+  function mockFetchWith(validateResponse: () => Record<string, unknown>) {
+    return vi.fn((input: RequestInfo | URL) => {
+      const url = input instanceof URL ? input.href : typeof input === 'string' ? input : input.url
+      if (url.endsWith('/api/v1/status')) {
+        return Promise.resolve({
+          ok: true, status: 200,
+          json: () => Promise.resolve({ backend: { health: 'ok', ready: true }, worker: { status: 'idle', heartbeat_at: null } }),
+        })
+      }
+      if (url.endsWith('/api/v1/providers')) {
+        return Promise.resolve({
+          ok: true, status: 200,
+          json: () => Promise.resolve([{ id: 'fal', name: 'fal.ai', configured: true, auth_required: true }]),
+        })
+      }
+      if (url.endsWith('/api/v1/settings/providers/fal/validate')) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(validateResponse()) })
+      }
+      return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) })
+    })
+  }
+
+  it('Tes API button probes the real provider and reports a valid key', async () => {
+    vi.stubGlobal('fetch', mockFetchWith(() => ({ ok: true, provider: 'fal', probe: 'provider_auth' })))
+    render(<BerandaApp />)
+    fireEvent.click(screen.getByRole('button', { name: 'Setelan' }))
+    const tesBtn = await screen.findByRole('button', { name: 'Tes fal.ai' })
+    expect(tesBtn).toBeEnabled() // kunci tersimpan (configured) → boleh dites
+    fireEvent.click(tesBtn)
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/kunci valid/))
+  })
+
+  it('Tes API reports a rejected key instead of pretending it works', async () => {
+    vi.stubGlobal('fetch', mockFetchWith(() => ({ ok: false, provider: 'fal', probe: 'provider_auth', reason: 'auth_rejected' })))
+    render(<BerandaApp />)
+    fireEvent.click(screen.getByRole('button', { name: 'Setelan' }))
+    const tesBtn = await screen.findByRole('button', { name: 'Tes fal.ai' })
+    fireEvent.click(tesBtn)
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/ditolak provider/i))
+  })
+
+  it('Tes API distinguishes unreachable network from an invalid key', async () => {
+    vi.stubGlobal('fetch', mockFetchWith(() => ({ ok: false, provider: 'fal', probe: 'provider_auth', reason: 'unreachable' })))
+    render(<BerandaApp />)
+    fireEvent.click(screen.getByRole('button', { name: 'Setelan' }))
+    const tesBtn = await screen.findByRole('button', { name: 'Tes fal.ai' })
+    fireEvent.click(tesBtn)
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/tidak terjangkau/))
+  })
 })
 describe('Beranda — mode malam / siang', () => {
   afterEach(() => {

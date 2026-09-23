@@ -81,6 +81,11 @@ const STRINGS = {
     keyMissing: 'belum ada key',
     keyPlaceholder: 'Tempel kunci API baru di sini',
     keyNote: 'Kunci hanya disimpan di backend, tidak pernah tampil utuh kembali.',
+    testKey: 'Tes',
+    testValid: 'kunci valid — provider menerima autentikasi',
+    testRejected: 'kunci DITOLAK provider — periksa/paste ulang key',
+    testUnreachable: 'provider tidak terjangkau — validitas belum bisa dipastikan',
+    testError: 'gagal mengetes kunci',
   },
   en: {
     appTitle: 'Gandiwa Studio — Home',
@@ -126,6 +131,11 @@ const STRINGS = {
     keyMissing: 'no key',
     keyPlaceholder: 'Paste a new API key here',
     keyNote: 'Keys are stored server-side only and are never shown back in full.',
+    testKey: 'Test',
+    testValid: 'key is valid — the provider accepted authentication',
+    testRejected: 'key REJECTED by the provider — re-check or re-paste the key',
+    testUnreachable: 'provider unreachable — validity cannot be confirmed yet',
+    testError: 'failed to test the key',
   },
 } as const
 
@@ -161,10 +171,12 @@ type ProviderKeyRowProps = {
   configured: boolean
   unavailable?: boolean
   saveProviderKey?: (provider: 'fal' | '9router', apiKey: string) => Promise<void>
+  validateProviderKey?: (provider: 'fal' | '9router') => Promise<void>
+  testing?: boolean
   t: Strings
 }
 
-function ProviderKeyRow({ provider, label, value, onChange, configured, unavailable = false, saveProviderKey, t }: ProviderKeyRowProps) {
+function ProviderKeyRow({ provider, label, value, onChange, configured, unavailable = false, saveProviderKey, validateProviderKey, testing = false, t }: ProviderKeyRowProps) {
   const canSave = !unavailable && value.trim().length > 0 && saveProviderKey !== undefined
   return (
     <div className="beranda-keyrow">
@@ -177,9 +189,22 @@ function ProviderKeyRow({ provider, label, value, onChange, configured, unavaila
         <input type="password" autoComplete="off" aria-label={`${t.newKey} ${label}`} value={value} onChange={(event) => onChange(event.target.value)} placeholder={t.keyPlaceholder} />
       </label>
       {unavailable && <p className="beranda-note">Connector backend belum tersedia — kunci tidak akan disimpan.</p>}
-      <button type="button" className="beranda-primary" disabled={!canSave} onClick={() => {
-        if (canSave && (provider === 'fal' || provider === '9router')) void saveProviderKey(provider, value.trim())
-      }}>{t.save} {label}</button>
+      <div className="beranda-keyrow-actions">
+        <button type="button" className="beranda-primary" disabled={!canSave} onClick={() => {
+          if (canSave && (provider === 'fal' || provider === '9router')) void saveProviderKey(provider, value.trim())
+        }}>{t.save} {label}</button>
+        {!unavailable && validateProviderKey !== undefined && (
+          <button
+            type="button"
+            className="beranda-ghost"
+            aria-label={`${t.testKey} ${label}`}
+            disabled={!configured || testing}
+            onClick={() => {
+              if (provider === 'fal' || provider === '9router') void validateProviderKey(provider)
+            }}
+          >{testing ? '…' : t.testKey} {label}</button>
+        )}
+      </div>
     </div>
   )
 }
@@ -201,6 +226,7 @@ export function BerandaApp() {
   })
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsNote, setSettingsNote] = useState<string | null>(null)
+  const [testingProvider, setTestingProvider] = useState<'fal' | '9router' | null>(null)
 
   const [imageApi, setImageApi] = useState<'fal' | 'openai-sunburst'>('fal')
   const [imageModel, setImageModel] = useState('fal-ai/flux/schnell')
@@ -501,6 +527,30 @@ export function BerandaApp() {
       }
     } catch (error) {
       setSettingsNote(error instanceof Error ? error.message : 'Gagal menyimpan kunci')
+    }
+  }
+
+  async function validateProviderKey(provider: 'fal' | '9router') {
+    setSettingsNote(null)
+    setTestingProvider(provider)
+    try {
+      const response = await fetch(`/api/v1/settings/providers/${provider}/validate`)
+      if (!response.ok) {
+        setSettingsNote(`${provider}: ${t.testError} (${response.status})`)
+        return
+      }
+      const body = (await response.json()) as { ok: boolean; reason?: string }
+      if (body.ok) {
+        setSettingsNote(`${provider}: ${t.testValid}`)
+      } else if (body.reason === 'auth_rejected') {
+        setSettingsNote(`${provider}: ${t.testRejected}`)
+      } else {
+        setSettingsNote(`${provider}: ${t.testUnreachable}`)
+      }
+    } catch (error) {
+      setSettingsNote(error instanceof Error ? error.message : t.testError)
+    } finally {
+      setTestingProvider(null)
     }
   }
 
@@ -861,7 +911,7 @@ export function BerandaApp() {
                     </> : <option value="gpt-2.5-sunburst">gpt-2.5-sunburst</option>}
                   </select>
                 </label>
-                {imageApi === 'fal' ? <ProviderKeyRow provider="fal" label="fal.ai" value={newFalKey} onChange={setNewFalKey} configured={providerRows.find((entry) => entry.provider === 'fal')?.configured === true} saveProviderKey={saveProviderKey} t={t} /> : <ProviderKeyRow provider="openai" label="OpenAI" value={newOpenAiKey} onChange={setNewOpenAiKey} configured={false} unavailable t={t} />}
+                {imageApi === 'fal' ? <ProviderKeyRow provider="fal" label="fal.ai" value={newFalKey} onChange={setNewFalKey} configured={providerRows.find((entry) => entry.provider === 'fal')?.configured === true} saveProviderKey={saveProviderKey} validateProviderKey={validateProviderKey} testing={testingProvider === 'fal'} t={t} /> : <ProviderKeyRow provider="openai" label="OpenAI" value={newOpenAiKey} onChange={setNewOpenAiKey} configured={false} unavailable t={t} />}
               </section>
 
               <section className="beranda-api-role" aria-label="Reasoning">
@@ -880,7 +930,7 @@ export function BerandaApp() {
                     <option value="provider-managed">Pilih model dari 9Router</option><option value="choose-after-connector">Pilih setelah connector tersedia</option>
                   </select>
                 </label>
-                {reasoningApi === '9router' ? <ProviderKeyRow provider="9router" label="9Router" value={newRouterKey} onChange={setNewRouterKey} configured={providerRows.find((entry) => entry.provider === '9router')?.configured === true} saveProviderKey={saveProviderKey} t={t} /> : <ProviderKeyRow provider={reasoningApi === 'openai-compatible' ? 'openai' : 'anthropic'} label={reasoningApi === 'openai-compatible' ? 'OpenAI compatible' : 'Anthropic compatible'} value={reasoningApi === 'openai-compatible' ? newOpenAiKey : newAnthropicKey} onChange={reasoningApi === 'openai-compatible' ? setNewOpenAiKey : setNewAnthropicKey} configured={false} unavailable t={t} />}
+                {reasoningApi === '9router' ? <ProviderKeyRow provider="9router" label="9Router" value={newRouterKey} onChange={setNewRouterKey} configured={providerRows.find((entry) => entry.provider === '9router')?.configured === true} saveProviderKey={saveProviderKey} validateProviderKey={validateProviderKey} testing={testingProvider === '9router'} t={t} /> : <ProviderKeyRow provider={reasoningApi === 'openai-compatible' ? 'openai' : 'anthropic'} label={reasoningApi === 'openai-compatible' ? 'OpenAI compatible' : 'Anthropic compatible'} value={reasoningApi === 'openai-compatible' ? newOpenAiKey : newAnthropicKey} onChange={reasoningApi === 'openai-compatible' ? setNewOpenAiKey : setNewAnthropicKey} configured={false} unavailable t={t} />}
               </section>
               {settingsNote && <p role="status" className="beranda-note">{settingsNote}</p>}
             </fieldset>

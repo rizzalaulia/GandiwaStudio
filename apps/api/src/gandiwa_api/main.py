@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Literal, TypedDict, cast
 from urllib.parse import quote
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -351,6 +352,80 @@ def test_provider_connection(provider: str) -> JSONResponse:
     store = ProviderKeyStore(current_settings)
     key = store.get(provider)
     return JSONResponse(content={"ok": key is not None, "provider": provider})
+
+
+_PROBE_REQUEST_ID = "00000000-0000-0000-0000-000000000000"
+_PROBE_TIMEOUT_SECONDS = 10.0
+_probe_client: httpx.Client | None = None  # test seam; None = real network
+
+
+def _probe_get(url: str, headers: dict[str, str]) -> httpx.Response:
+    """Bounded GET for auth probing; redirects stay off at the connector boundary."""
+    if _probe_client is not None:
+        return _probe_client.get(url, headers=headers, timeout=_PROBE_TIMEOUT_SECONDS)
+    return httpx.get(url, headers=headers, timeout=_PROBE_TIMEOUT_SECONDS, follow_redirects=False)
+
+
+def _probe_post(url: str, headers: dict[str, str]) -> httpx.Response:
+    """Bounded body-less POST for fal queue-status auth probing."""
+    if _probe_client is not None:
+        return _probe_client.post(url, headers=headers, timeout=_PROBE_TIMEOUT_SECONDS)
+    return httpx.post(url, headers=headers, timeout=_PROBE_TIMEOUT_SECONDS, follow_redirects=False)
+
+
+def _probe_provider_auth(provider: str, key: str) -> tuple[bool, str | None]:
+    """Ask the REAL provider whether this key authenticates — no billable job.
+
+    fal: GET request-status of a nil UUID on the official queue origin; a valid
+    key passes auth and reaches the 404 "request not found", an invalid key
+    gets 401/403. 9Router: GET /v1/models on the first configured instance.
+    Never returns or logs the key; network trouble is "unreachable", which is
+    NOT a validity verdict.
+    """
+    try:
+        if provider == "fal":
+            # fal's queue status endpoint only answers POST (GET is 405 for
+            # everyone). A valid key passes auth and reaches the 404
+            # "request not found"; an invalid key is bounced 401/403 first.
+            # The nil UUID never exists: nothing is enqueued or charged.
+            response = _probe_post(
+                f"https://queue.fal.run/fal-ai/flux/schnell/requests/{_PROBE_REQUEST_ID}/status",
+                headers={"Authorization": f"Key {key}"},
+            )
+        else:
+            instances = Settings().NINEROUTER_INSTANCES
+            if not instances:
+                return (False, "unreachable")
+            origin = next(iter(instances.values())).rstrip("/")
+            response = _probe_get(
+                f"{origin}/v1/models",
+                headers={"Authorization": f"Bearer {key}"},
+            )
+    except (httpx.TimeoutException, httpx.TransportError, OSError):
+        return (False, "unreachable")
+    if response.status_code == 404 and provider == "fal":
+        return (True, None)
+    if provider == "9router" and response.status_code == 200:
+        return (True, None)
+    if response.status_code in (401, 403):
+        return (False, "auth_rejected")
+    return (False, "unreachable")
+
+
+@app.get("/api/v1/settings/providers/{provider}/validate")
+def validate_provider_key(provider: str) -> JSONResponse:
+    """Prove the stored key is valid at the real provider — not merely present."""
+    if provider not in _SETTINGS_PROVIDERS:
+        raise HTTPException(status_code=404, detail="unknown provider")
+    current_settings = Settings()
+    key = ProviderKeyStore(current_settings).get(provider)
+    if key is None:
+        raise HTTPException(status_code=409, detail="no key stored for this provider")
+    ok, reason = _probe_provider_auth(provider, key)
+    body: dict[str, object] = {"ok": ok, "provider": provider, "probe": "provider_auth"}
+    if reason is not None:
+        body["reason"] = reason
+    return JSONResponse(content=body)
 
 
 @app.get("/api/v1/creative/bootstrap")
