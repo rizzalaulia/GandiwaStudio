@@ -1,7 +1,7 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 
-import { App } from './App'
+import { RootGate } from './root-gate'
 import './styles.css'
 import './beranda/beranda.css'
 
@@ -13,6 +13,6 @@ if (root === null) {
 
 createRoot(root).render(
   <StrictMode>
-    <App />
+    <RootGate />
   </StrictMode>,
 )
