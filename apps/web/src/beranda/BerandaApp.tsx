@@ -411,6 +411,8 @@ export function BerandaApp() {
         manifestSnapshot,
         sidecarSnapshot: undefined,
       })
+      setActiveJobId(job.id)
+      setCancelRequested(false)
       setGenerationStatus({
         state: 'busy',
         message: `Job ${job.id} terkirim ke antrean (${job.status}). Memantau status…`,

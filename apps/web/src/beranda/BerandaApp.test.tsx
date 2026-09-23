@@ -302,7 +302,7 @@ describe('Beranda — meja kerja studio', () => {
     dispatchController.dispatchApprovedCreativeJob.mockResolvedValue({
       job: {
         id: 'job-1', status: 'queued', provider_id: 'fal', model_id: 'fal-ai/flux/schnell',
-        attempt_count: 0, cancel_requested: false, created_at: '2026-09-22T00:00:00Z',
+        attempt_count: 0, artifact_expires_at: null, cancel_requested: false, created_at: '2026-09-22T00:00:00Z',
         started_at: null, completed_at: null, error_code: null, message: null, artifact: null,
       },
       persisted: {
@@ -352,7 +352,7 @@ describe('Beranda — meja kerja studio', () => {
           status: 200,
           json: () => Promise.resolve({
             id: 'job-1', status: 'failed', provider_id: 'fal', model_id: 'fal-ai/flux/schnell',
-            attempt_count: 1, cancel_requested: false, created_at: '2026-09-22T00:00:00Z',
+            attempt_count: 1, artifact_expires_at: null, cancel_requested: false, created_at: '2026-09-22T00:00:00Z',
             started_at: '2026-09-22T00:01:00Z', completed_at: '2026-09-22T00:02:00Z',
             error_code: null, message: null, artifact: null,
           }),
@@ -634,7 +634,7 @@ describe('Beranda — hasil job ke kanvas & unduhan aman', () => {
     return {
       job: {
         id, status: 'queued', provider_id: 'fal', model_id: 'fal-ai/flux/schnell',
-        attempt_count: 0, cancel_requested: false, created_at: '2026-09-22T00:00:00Z',
+        attempt_count: 0, artifact_expires_at: null, cancel_requested: false, created_at: '2026-09-22T00:00:00Z',
         started_at: null, completed_at: null, error_code: null, message: null, artifact: null,
       },
       persisted: {
@@ -698,7 +698,7 @@ describe('Beranda — hasil job ke kanvas & unduhan aman', () => {
           status: 200,
           json: () => Promise.resolve({
             id: 'job-canv-1', status: 'succeeded', provider_id: 'fal', model_id: 'fal-ai/flux/schnell',
-            attempt_count: 1, cancel_requested: false, created_at: '2026-09-22T00:00:00Z',
+            attempt_count: 1, artifact_expires_at: null, cancel_requested: false, created_at: '2026-09-22T00:00:00Z',
             started_at: '2026-09-22T00:01:00Z', completed_at: '2026-09-22T00:02:00Z',
             error_code: null, message: null,
             artifact: { id: 'art-canvas', media_type: 'image/png', size_bytes: 4, sha256: REAL_DIGEST, width: 2000, height: 2000 },
@@ -751,7 +751,7 @@ describe('Beranda — hasil job ke kanvas & unduhan aman', () => {
           status: 200,
           json: () => Promise.resolve({
             id: 'job-fail-1', status: 'failed', provider_id: 'fal', model_id: 'fal-ai/flux/schnell',
-            attempt_count: 1, cancel_requested: false, created_at: '2026-09-22T00:00:00Z',
+            attempt_count: 1, artifact_expires_at: null, cancel_requested: false, created_at: '2026-09-22T00:00:00Z',
             started_at: '2026-09-22T00:01:00Z', completed_at: '2026-09-22T00:02:00Z',
             error_code: 'PROVIDER_ERROR', message: 'Provider exploded at generation time',
             artifact: null,
@@ -787,7 +787,7 @@ describe('Beranda — hasil job ke kanvas & unduhan aman', () => {
           status: 200,
           json: () => Promise.resolve({
             id: 'job-review-1', status: 'needs_review', provider_id: 'fal', model_id: 'fal-ai/flux/schnell',
-            attempt_count: 1, cancel_requested: false, created_at: '2026-09-22T00:00:00Z',
+            attempt_count: 1, artifact_expires_at: null, cancel_requested: false, created_at: '2026-09-22T00:00:00Z',
             started_at: '2026-09-22T00:01:00Z', completed_at: '2026-09-22T00:02:00Z',
             error_code: 'UNKNOWN_PROVIDER_OUTCOME', message: 'Provider outcome needs review',
             artifact: null,
