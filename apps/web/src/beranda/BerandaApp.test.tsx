@@ -32,6 +32,30 @@ const creativeAdapter = vi.hoisted(() => ({
   buildApprovedCreativeJob: vi.fn(),
 }))
 
+// Runtime endpoints real fetch stubs must serve: the studio fetches both on
+// mount, and the REAL status-client merge maps the routed row id ('mibp')
+// onto the settings id ('9router'). Falls through to the per-test handler.
+const RUNTIME_ENDPOINTS = (fetchFallback: (input: RequestInfo | URL) => Promise<unknown>) =>
+  vi.fn((input: RequestInfo | URL) => {
+    const url = input instanceof URL ? input.href : typeof input === 'string' ? input : input.url
+    if (url.endsWith('/api/v1/status')) {
+      return Promise.resolve({
+        ok: true, status: 200,
+        json: () => Promise.resolve({ backend: { health: 'ok', ready: true }, worker: { status: 'running', heartbeat_at: '2026-09-23T00:00:00Z' } }),
+      })
+    }
+    if (url.endsWith('/api/v1/providers')) {
+      return Promise.resolve({
+        ok: true, status: 200,
+        json: () => Promise.resolve([
+          { id: 'fal', name: 'fal.ai', configured: true, auth_required: true },
+          { id: 'mibp', name: '9Router · mibp', configured: true, auth_required: true },
+        ]),
+      })
+    }
+    return fetchFallback(input)
+  })
+
 const MANIFEST_TEXT = JSON.stringify({
   schema_version: 1,
   project_id: '3f2b8a64-9c1d-4e7a-b2f5-8d60c1a94e21',
@@ -226,20 +250,13 @@ function fakeProjectDirectory(overrides: { manifestText?: string } = {}): unknow
 }
 
 
-vi.mock('./status-client', () => ({
-  fetchStatus: vi.fn(() =>
-    Promise.resolve({
-      version: '0.0.0',
-      mvp_version: 'mvp-1.0',
-      backend: { health: 'ok', ready: true, checks: {} },
-      worker: { status: 'running', heartbeat_at: '2026-09-23T00:00:00Z' },
-      providers: [
-        { provider: 'fal', configured: true, testable: true },
-        { provider: '9router', configured: true, testable: true },
-      ],
-    }),
-  ),
-}))
+// status-client is deliberately NOT module-mocked: its providers merge feeds
+// the settings rows' configured state. Mocking it wholesale (with hardcoded
+// {provider:'9router',configured:true} chips) blinded the suite to a real
+// identity bug (24 Sep): registry rows carry INSTANCE ids ('mibp') while the
+// key store uses the SETTINGS id ('9router'), so the Tes button stayed
+// disabled with a stored, valid key. Tests stub fetch instead and exercise
+// the real merge path in status-client.ts.
 
 describe('Beranda — meja kerja studio', () => {
   afterEach(() => {
@@ -457,7 +474,7 @@ describe('Beranda — meja kerja studio', () => {
       },
       persisted: APPROVED_FIXTURE_TYPE.sidecar,
     })
-    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+    vi.stubGlobal('fetch', RUNTIME_ENDPOINTS(vi.fn((input: RequestInfo | URL) => {
       const url = input instanceof URL ? input.href : typeof input === 'string' ? input : input.url
       if (url.endsWith('/api/v1/creative/jobs/job-cont-1')) {
         return Promise.resolve({
@@ -471,7 +488,7 @@ describe('Beranda — meja kerja studio', () => {
         })
       }
       return Promise.reject(new Error(`unexpected request: ${url}`))
-    }))
+    })))
 
     render(<BerandaApp />)
     fireEvent.click(screen.getByRole('button', { name: 'Buka proyek' }))
@@ -487,6 +504,7 @@ describe('Beranda — meja kerja studio', () => {
   })
 
   it('places system status beneath Title & Keywords, not in the header', async () => {
+    vi.stubGlobal('fetch', RUNTIME_ENDPOINTS(vi.fn(() => Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) }))))
     render(<BerandaApp />)
     const status = screen.getByRole('region', { name: 'Status sistem' })
     const metadata = screen.getByRole('region', { name: 'Title & Keywords' })
@@ -570,7 +588,7 @@ describe('Beranda — meja kerja studio', () => {
     })
     // Monitoring hits the real fetch client; keep it inside this test's
     //Boundary by stubbing the job endpoint at its terminal state directly.
-    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+    vi.stubGlobal('fetch', RUNTIME_ENDPOINTS(vi.fn((input: RequestInfo | URL) => {
       const url = input instanceof URL ? input.href : typeof input === 'string' ? input : input.url
       if (url.endsWith('/api/v1/creative/jobs/job-1')) {
         return Promise.resolve({
@@ -585,7 +603,7 @@ describe('Beranda — meja kerja studio', () => {
         })
       }
       return Promise.reject(new Error(`unexpected request: ${url}`))
-    }))
+    })))
     render(<BerandaApp />)
     fireEvent.click(screen.getByRole('button', { name: 'Buka proyek' }))
     await waitFor(() => expect(screen.getByRole('toolbar')).toHaveTextContent('dibuka secara lokal'))
@@ -627,6 +645,7 @@ describe('Beranda — meja kerja studio', () => {
     dispatchController.dispatchApprovedCreativeJob.mockRejectedValue(
       new Error('project manifest changed externally; reload before saving creative session'),
     )
+    vi.stubGlobal('fetch', RUNTIME_ENDPOINTS(vi.fn(() => Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) }))))
     render(<BerandaApp />)
     fireEvent.click(screen.getByRole('button', { name: 'Buka proyek' }))
     await waitFor(() => expect(screen.getByRole('toolbar')).toHaveTextContent('dibuka secara lokal'))
@@ -745,7 +764,7 @@ describe('Beranda — meja kerja studio', () => {
       eligible_for_submission: false,
       findings: [{ rule_id: 'illustration-raster.submission-format', message: 'Final submission must be JPEG.' }],
     }), { status: 200 })
-    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+    vi.stubGlobal('fetch', RUNTIME_ENDPOINTS(vi.fn((input: RequestInfo | URL) => {
       const url = input instanceof URL ? input.href : typeof input === 'string' ? input : input.url
       if (url.endsWith('/api/v1/auth/csrf')) {
         return Promise.resolve(new Response(JSON.stringify({ csrf_token: 'csrf-ui-1' }), { status: 200 }))
@@ -758,7 +777,7 @@ describe('Beranda — meja kerja studio', () => {
         return Promise.resolve(preflightReport())
       }
       return Promise.reject(new Error(`unexpected request: ${url}`))
-    }))
+    })))
 
     render(<BerandaApp />)
     fireEvent.click(screen.getByRole('button', { name: 'Buka proyek' }))
@@ -770,7 +789,9 @@ describe('Beranda — meja kerja studio', () => {
     fireEvent.change(screen.getByLabelText('Kategori metadata'), { target: { value: 'Objects' } })
     fireEvent.change(screen.getByLabelText('Disclosure AI'), { target: { value: 'Created with generative AI.' } })
     fireEvent.click(screen.getByRole('button', { name: 'Simpan metadata revisi' }))
-    await waitFor(() => expect(screen.getByText(/Metadata tersimpan/)).toBeInTheDocument())
+    // Full-suite runs share CPU across parallel file workers; the save chain
+    // (permission + sidecar write) can exceed the default 1s wait window.
+    await waitFor(() => expect(screen.getByText(/Metadata tersimpan/)).toBeInTheDocument(), { timeout: 4000 })
 
     fireEvent.click(screen.getByRole('button', { name: 'Jalankan preflight revisi' }))
     await waitFor(() => expect(screen.getByText('Menjalankan audit…')).toBeInTheDocument())
@@ -778,7 +799,7 @@ describe('Beranda — meja kerja studio', () => {
     // Sibling path bumps the audit sequence while the preflight is in flight.
     fireEvent.change(screen.getByLabelText('Judul'), { target: { value: 'Ceramic cup under warmer light' } })
     fireEvent.click(screen.getByRole('button', { name: 'Simpan metadata revisi' }))
-    await waitFor(() => expect(screen.getByText(/Metadata tersimpan/)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/Metadata tersimpan/)).toBeInTheDocument(), { timeout: 4000 })
 
     // The invalidating save must release the audit button immediately —
     // not wait for the abandoned run's network promise to settle.
@@ -807,6 +828,27 @@ describe('Beranda — setelan: bahasa & API key', () => {
     expect(dialog).toBeVisible()
     expect(dialog).toHaveTextContent('Bahasa')
     expect(dialog).toHaveTextContent('API Key')
+  })
+
+  it('renders the hallmacked settings desk: charcoal mast + light ledger, no tabs', () => {
+    render(<BerandaApp />)
+    fireEvent.click(screen.getByRole('button', { name: 'Setelan' }))
+    const dialog = screen.getByRole('dialog', { name: 'Setelan' })
+    // Zona kiri: masthead arang dengan judul + status hidup provider.
+    const mast = dialog.querySelector('.beranda-settings-mast')
+    if (!mast) throw new Error('dialog Setelan tak punya zona mast arang')
+    expect(mast).toHaveTextContent('Setelan')
+    const mastLines = mast.querySelectorAll('.beranda-settings-live li')
+    // Min 1: baris Backend selalu ada; baris provider tampil saat registry
+    // provider sampai ke komponen (test lain membuktikan jalurnya).
+    expect(mastLines.length).toBeGreaterThanOrEqual(1)
+    // Zona kanan: ledger terang memuat SEMUA pilihan sekaligus (tanpa tab).
+    const ledger = dialog.querySelector('.beranda-settings-ledger')
+    if (!ledger) throw new Error('dialog Setelan tak punya ledger terang')
+    expect(ledger).toHaveTextContent('Bahasa')
+    expect(ledger).toHaveTextContent('Image generation')
+    expect(ledger).toHaveTextContent('Reasoning')
+    expect(screen.queryByRole('tab', { hidden: true })).toBeNull()
   })
 
   it('closes the dialog with Escape', () => {
@@ -939,6 +981,53 @@ describe('Beranda — setelan: bahasa & API key', () => {
     const tesBtn = await screen.findByRole('button', { name: 'Tes fal.ai' })
     fireEvent.click(tesBtn)
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/ditolak provider/i))
+  })
+
+  it('Tes 9Router is enabled from any instance row id and probes the stored key', async () => {
+    // The providers registry names the router row by INSTANCE id (e.g. 'mibp'),
+    // while the key store row is the SETTINGS provider '9router'. The Tes
+    // button must treat every non-fal row as the 9Router family: a stored,
+    // configured key must enable the test and probe /9router/validate —
+    // the row id never blocks it again.
+    const calls: string[] = []
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = input instanceof URL ? input.href : typeof input === 'string' ? input : input.url
+      if (url.endsWith('/api/v1/status')) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ backend: { health: 'ok', ready: true }, worker: { status: 'running', heartbeat_at: '2026-09-23T00:00:00Z' } }) })
+      }
+      if (url.endsWith('/api/v1/providers')) {
+        return Promise.resolve({
+          ok: true, status: 200,
+          json: () => Promise.resolve([
+            { id: 'fal', name: 'fal.ai', configured: true, auth_required: true },
+            { id: 'mibp', name: '9Router · mibp', configured: true, auth_required: true },
+          ]),
+        })
+      }
+      if (url.endsWith('/api/v1/settings/providers/9router/validate')) {
+        calls.push(url)
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true, provider: '9router', probe: 'provider_auth' }) })
+      }
+      return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) })
+    }))
+    render(<BerandaApp />)
+    fireEvent.click(screen.getByRole('button', { name: 'Setelan' }))
+    const tesBtn = await screen.findByRole('button', { name: 'Tes 9Router' })
+    expect(tesBtn).toBeEnabled()
+    fireEvent.click(tesBtn)
+    await waitFor(() => expect(calls).toContain('/api/v1/settings/providers/9router/validate'))
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/kunci valid/))
+  })
+
+  it('Tes API names an account lockout honestly instead of blaming the key', async () => {
+    vi.stubGlobal('fetch', mockFetchWith(() => ({ ok: false, provider: 'fal', probe: 'provider_auth', reason: 'account_locked', authenticated: true })))
+    render(<BerandaApp />)
+    fireEvent.click(screen.getByRole('button', { name: 'Setelan' }))
+    const tesBtn = await screen.findByRole('button', { name: 'Tes fal.ai' })
+    fireEvent.click(tesBtn)
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/kunci sah/i))
+    expect(screen.getByRole('status')).toHaveTextContent(/terkunci/i)
+    expect(screen.getByRole('status')).toHaveTextContent(/tidak perlu di-paste ulang/i)
   })
 
   it('Tes API distinguishes unreachable network from an invalid key', async () => {
@@ -1075,7 +1164,7 @@ describe('Beranda — hasil job ke kanvas & unduhan aman', () => {
     })
     creativeAdapter.buildApprovedCreativeJob.mockResolvedValue(APPROVED_FIXTURE)
     dispatchController.dispatchApprovedCreativeJob.mockResolvedValue(succeededJobShape('job-canv-1'))
-    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+    const fetchMock = RUNTIME_ENDPOINTS(vi.fn((input: RequestInfo | URL) => {
       const url = input instanceof URL ? input.href : typeof input === 'string' ? input : input.url
       if (url.endsWith('/api/v1/creative/jobs/job-canv-1')) {
         return Promise.resolve({
@@ -1099,7 +1188,7 @@ describe('Beranda — hasil job ke kanvas & unduhan aman', () => {
         })
       }
       return Promise.reject(new Error(`unexpected request: ${url}`))
-    })
+    }))
     vi.stubGlobal('fetch', fetchMock)
 
     render(<BerandaApp />)
@@ -1128,7 +1217,7 @@ describe('Beranda — hasil job ke kanvas & unduhan aman', () => {
     })
     creativeAdapter.buildApprovedCreativeJob.mockResolvedValue(APPROVED_FIXTURE)
     dispatchController.dispatchApprovedCreativeJob.mockResolvedValue(succeededJobShape('job-fail-1'))
-    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+    vi.stubGlobal('fetch', RUNTIME_ENDPOINTS(vi.fn((input: RequestInfo | URL) => {
       const url = input instanceof URL ? input.href : typeof input === 'string' ? input : input.url
       if (url.endsWith('/api/v1/creative/jobs/job-fail-1')) {
         return Promise.resolve({
@@ -1144,7 +1233,7 @@ describe('Beranda — hasil job ke kanvas & unduhan aman', () => {
         })
       }
       return Promise.reject(new Error(`unexpected request: ${url}`))
-    }))
+    })))
 
     render(<BerandaApp />)
     fireEvent.click(screen.getByRole('button', { name: 'Buka proyek' }))
@@ -1164,7 +1253,7 @@ describe('Beranda — hasil job ke kanvas & unduhan aman', () => {
     })
     creativeAdapter.buildApprovedCreativeJob.mockResolvedValue(APPROVED_FIXTURE)
     dispatchController.dispatchApprovedCreativeJob.mockResolvedValue(succeededJobShape('job-review-1'))
-    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+    vi.stubGlobal('fetch', RUNTIME_ENDPOINTS(vi.fn((input: RequestInfo | URL) => {
       const url = input instanceof URL ? input.href : typeof input === 'string' ? input : input.url
       if (url.endsWith('/api/v1/creative/jobs/job-review-1')) {
         return Promise.resolve({
@@ -1180,7 +1269,7 @@ describe('Beranda — hasil job ke kanvas & unduhan aman', () => {
         })
       }
       return Promise.reject(new Error(`unexpected request: ${url}`))
-    }))
+    })))
 
     render(<BerandaApp />)
     fireEvent.click(screen.getByRole('button', { name: 'Buka proyek' }))

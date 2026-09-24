@@ -112,6 +112,7 @@ const STRINGS = {
     testKey: 'Tes',
     testValid: 'kunci valid — provider menerima autentikasi',
     testRejected: 'kunci DITOLAK provider — periksa/paste ulang key',
+    testAccountLocked: 'kunci SAH — tanpa autentikasi gagal; akun provider terkunci (mis. saldo habis). Selesaikan di dashboard provider; kunci tidak perlu di-paste ulang.',
     testUnreachable: 'provider tidak terjangkau — validitas belum bisa dipastikan',
     testError: 'gagal mengetes kunci',
   },
@@ -162,6 +163,7 @@ const STRINGS = {
     testKey: 'Test',
     testValid: 'key is valid — the provider accepted authentication',
     testRejected: 'key REJECTED by the provider — re-check or re-paste the key',
+    testAccountLocked: 'key is VALID — authentication did not fail; the provider account is locked (e.g. exhausted balance). Resolve it at the provider dashboard; the key does not need re-pasting.',
     testUnreachable: 'provider unreachable — validity cannot be confirmed yet',
     testError: 'failed to test the key',
   },
@@ -201,7 +203,7 @@ type ProviderKeyRowProps = {
   saveProviderKey?: (provider: 'fal' | '9router', apiKey: string) => Promise<void>
   validateProviderKey?: (provider: 'fal' | '9router') => Promise<void>
   testing?: boolean
-  keyTest?: { provider: string; note: string; level: 'ok' | 'rejected' | 'unreachable' | 'error' } | null
+  keyTest?: { provider: string; note: string; level: 'ok' | 'rejected' | 'account' | 'unreachable' | 'error' } | null
   t: Strings
 }
 
@@ -233,7 +235,7 @@ function ProviderKeyRow({ provider, label, value, onChange, configured, unavaila
             onClick={() => {
               if (provider === 'fal' || provider === '9router') void validateProviderKey(provider)
             }}
-          ><span className="beranda-btn-test-icon" aria-hidden="true">{testing ? '⏳' : rowTest === null ? '⚡' : rowTest.level === 'ok' ? '✓' : rowTest.level === 'rejected' ? '✕' : '⚠'}</span>{testing ? `${t.testKey}…` : t.testKey} {label}</button>
+          ><span className="beranda-btn-test-icon" aria-hidden="true">{testing ? '⏳' : rowTest === null ? '⚡' : rowTest.level === 'ok' ? '✓' : rowTest.level === 'rejected' ? '✕' : rowTest.level === 'account' ? '🔒' : '⚠'}</span>{testing ? `${t.testKey}…` : t.testKey} {label}</button>
         )}
       </div>
       {rowTest !== null && (
@@ -333,7 +335,7 @@ export function BerandaApp() {
   })
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsNote, setSettingsNote] = useState<string | null>(null)
-  const [keyTest, setKeyTest] = useState<{ provider: string; note: string; level: 'ok' | 'rejected' | 'unreachable' | 'error' } | null>(null)
+  const [keyTest, setKeyTest] = useState<{ provider: string; note: string; level: 'ok' | 'rejected' | 'account' | 'unreachable' | 'error' } | null>(null)
   const [testingProvider, setTestingProvider] = useState<'fal' | '9router' | null>(null)
 
   const [newFalKey, setNewFalKey] = useState('')
@@ -1133,9 +1135,11 @@ export function BerandaApp() {
         setKeyTest({ provider, note: `${t.testError} (${response.status})`, level: 'error' })
         return
       }
-      const body = (await response.json()) as { ok: boolean; reason?: string }
+      const body = (await response.json()) as { ok: boolean; reason?: string; authenticated?: boolean }
       if (body.ok) {
         setKeyTest({ provider, note: t.testValid, level: 'ok' })
+      } else if (body.reason === 'account_locked') {
+        setKeyTest({ provider, note: t.testAccountLocked, level: 'account' })
       } else if (body.reason === 'auth_rejected') {
         setKeyTest({ provider, note: t.testRejected, level: 'rejected' })
       } else {
@@ -1674,108 +1678,110 @@ export function BerandaApp() {
             role="dialog"
             aria-modal="true"
             aria-label={t.settingsTitle}
-            className="beranda-dialog"
+            className="beranda-dialog beranda-settings-desk"
             onClick={(event) => event.stopPropagation()}
           >
-            <header className="beranda-dialog-head">
-              <h2>{t.settingsTitle}</h2>
-              <button
-                type="button"
-                className="beranda-chip"
-                onClick={() => setSettingsOpen(false)}
-                aria-label={lang === 'id' ? 'Tutup setelan' : 'Close settings'}
-              >
-                ✕
-              </button>
-            </header>
-
-            <fieldset className="beranda-dialog-section">
-              <legend>{t.language}</legend>
-              <label className="beranda-radio">
-                <input
-                  type="radio"
-                  name="beranda-lang"
-                  checked={lang === 'id'}
-                  onChange={() => changeLang('id')}
-                />
-                <span>Bahasa Indonesia</span>
-              </label>
-              <label className="beranda-radio">
-                <input
-                  type="radio"
-                  name="beranda-lang"
-                  checked={lang === 'en'}
-                  onChange={() => changeLang('en')}
-                />
-                <span>English</span>
-              </label>
-            </fieldset>
-
-            <fieldset className="beranda-dialog-section">
-              <legend>{t.apiKeys}</legend>
-              <p className="beranda-note">{t.keyNote}</p>
-
-              <section className="beranda-api-role" aria-label="Image generation">
-                <div className="beranda-api-role-head"><strong>Image generation</strong><span>1 gambar / job</span></div>
-                <label className="beranda-field"><span>API</span>
-                  <select aria-label="API image generation" value="fal" disabled>
-                    <option value="fal">fal.ai · aktif</option>
-                    <option value="openai-sunburst" disabled>OpenAI · gpt-2.5-sunburst · belum tersedia</option>
-                  </select>
+            <div className="beranda-settings-mast">
+              <div className="beranda-settings-mast-head">
+                <h2>{t.settingsTitle}</h2>
+                <button
+                  type="button"
+                  className="beranda-chip"
+                  onClick={() => setSettingsOpen(false)}
+                  aria-label={lang === 'id' ? 'Tutup setelan' : 'Close settings'}
+                >✕</button>
+              </div>
+              <p className="beranda-settings-purpose">
+                {lang === 'id'
+                  ? 'Bahasa antarmuka dan koneksi AI. Kunci hanya disimpan di backend, tidak pernah tampil utuh kembali.'
+                  : 'Interface language and AI connections. Keys are stored server-side only and are never shown back in full.'}
+              </p>
+              <ul className="beranda-settings-live">
+                <li>
+                  <i aria-hidden="true" className={`beranda-settings-dot${status && status.backend.health === 'ok' ? ' beranda-settings-dot-ok' : ' beranda-settings-dot-warn'}`} />
+                  <span>{t.backend}</span>
+                  <b>{status ? status.backend.health : '…'}</b>
+                </li>
+                {providerRows.map((provider) => (
+                  <li key={provider.provider}>
+                    <i aria-hidden="true" className={`beranda-settings-dot${provider.configured ? ' beranda-settings-dot-ok' : ' beranda-settings-dot-warn'}`} />
+                    <span>{providerLabel(provider.provider)}</span>
+                    <b>{provider.configured ? t.keyConfigured : t.noKey}</b>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div className="beranda-settings-ledger">
+              <section aria-labelledby="beranda-settings-lang">
+                <h4 id="beranda-settings-lang">{t.language}</h4>
+                <label className="beranda-radio">
+                  <input type="radio" name="beranda-lang" checked={lang === 'id'} onChange={() => changeLang('id')} />
+                  <span>Bahasa Indonesia</span>
                 </label>
-                <label className="beranda-field"><span>Model</span>
-                  <select aria-label="Model image generation" value={model} onChange={(event) => setModel(event.target.value)}>
-                    {MODEL_OPTIONS.map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
-                  </select>
+                <label className="beranda-radio">
+                  <input type="radio" name="beranda-lang" checked={lang === 'en'} onChange={() => changeLang('en')} />
+                  <span>English</span>
                 </label>
-                <ProviderKeyRow provider="fal" label="fal.ai" value={newFalKey} onChange={setNewFalKey} configured={providerRows.find((entry) => entry.provider === 'fal')?.configured === true} saveProviderKey={saveProviderKey} validateProviderKey={validateProviderKey} testing={testingProvider === 'fal'} keyTest={keyTest} t={t} />
               </section>
-
-              <section className="beranda-api-role" aria-label="Reasoning">
-                <div className="beranda-api-role-head"><strong>Reasoning</strong><span>prompt & metadata</span></div>
-                <label className="beranda-field"><span>API</span>
-                  <select aria-label="API reasoning" value="9router" disabled>
-                    <option value="9router">9Router · credential saja</option>
-                  </select>
-                </label>
-                <label className="beranda-field"><span>Instance</span>
-                  <select
-                    aria-label="Instance reasoning 9Router"
-                    value={assistantInstance ?? ''}
-                    disabled={assistantInstances === null || assistantInstances.length === 0}
-                    onChange={(event) => {
-                      const chosen = event.target.value
-                      if (!chosen) {
-                        clearSelectedInstance()
-                        setAssistantInstance(null)
-                      } else {
-                        persistSelectedInstance(chosen)
-                        setAssistantInstance(chosen)
-                      }
-                    }}
-                  >
-                    <option value="">Pilih instance…</option>
-                    {(assistantInstances ?? []).map((instance) => (
-                      <option key={instance.id} value={instance.id}>{instance.name}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="beranda-field"><span>Model</span>
-                  <input
-                    aria-label="Model reasoning 9Router"
-                    placeholder="cth. qwen/qwen3-32b — wajib dipilih eksplisit, tanpa auto"
-                    value={assistantModel}
-                    onChange={(event) => {
+              <section aria-labelledby="beranda-settings-keys">
+                <h4 id="beranda-settings-keys">{t.apiKeys}</h4>
+                <p className="beranda-note">{t.keyNote}</p>
+                <section className="beranda-api-role" aria-label="Image generation">
+                  <div className="beranda-api-role-head"><strong>Image generation</strong><span>1 gambar / job</span></div>
+                  <label className="beranda-field"><span>API</span>
+                    <select aria-label="API image generation" value="fal" disabled>
+                      <option value="fal">fal.ai · aktif</option>
+                      <option value="openai-sunburst" disabled>OpenAI · gpt-2.5-sunburst · belum tersedia</option>
+                    </select>
+                  </label>
+                  <label className="beranda-field"><span>Model</span>
+                    <select aria-label="Model image generation" value={model} onChange={(event) => setModel(event.target.value)}>
+                      {MODEL_OPTIONS.map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
+                    </select>
+                  </label>
+                  <ProviderKeyRow provider="fal" label="fal.ai" value={newFalKey} onChange={setNewFalKey} configured={providerRows.find((entry) => entry.provider === 'fal')?.configured === true} saveProviderKey={saveProviderKey} validateProviderKey={validateProviderKey} testing={testingProvider === 'fal'} keyTest={keyTest} t={t} />
+                </section>
+                <section className="beranda-api-role" aria-label="Reasoning">
+                  <div className="beranda-api-role-head"><strong>Reasoning</strong><span>prompt &amp; metadata</span></div>
+                  <label className="beranda-field"><span>API</span>
+                    <select aria-label="API reasoning" value="9router" disabled>
+                      <option value="9router">9Router · credential saja</option>
+                    </select>
+                  </label>
+                  <label className="beranda-field"><span>Instance</span>
+                    <select
+                      aria-label="Instance reasoning 9Router"
+                      value={assistantInstance ?? ''}
+                      disabled={assistantInstances === null || assistantInstances.length === 0}
+                      onChange={(event) => {
+                        const chosen = event.target.value
+                        if (!chosen) {
+                          clearSelectedInstance()
+                          setAssistantInstance(null)
+                        } else {
+                          persistSelectedInstance(chosen)
+                          setAssistantInstance(chosen)
+                        }
+                      }}
+                    >
+                      <option value="">Pilih instance…</option>
+                      {(assistantInstances ?? []).map((instance) => (
+                        <option key={instance.id} value={instance.id}>{instance.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="beranda-field"><span>Model</span>
+                    <input aria-label="Model reasoning 9Router" placeholder="cth. qwen/qwen3-32b — wajib dipilih eksplisit, tanpa auto" value={assistantModel} onChange={(event) => {
                       setAssistantModel(event.target.value)
                       try { window.localStorage.setItem('beranda-router-model', event.target.value) } catch { /* sesi saja */ }
-                    }}
-                  />
-                </label>
-                <p className="beranda-note">Kunci dapat disimpan dan diuji; brainstorm memakai model reasoning ini secara eksplisit.</p>
-                <ProviderKeyRow provider="9router" label="9Router" value={newRouterKey} onChange={setNewRouterKey} configured={providerRows.find((entry) => entry.provider === '9router')?.configured === true} saveProviderKey={saveProviderKey} validateProviderKey={validateProviderKey} testing={testingProvider === '9router'} keyTest={keyTest} t={t} />
+                    }} />
+                  </label>
+                  <p className="beranda-note">Kunci dapat disimpan dan diuji; brainstorm memakai model reasoning ini secara eksplisit.</p>
+                  <ProviderKeyRow provider="9router" label="9Router" value={newRouterKey} onChange={setNewRouterKey} configured={providerRows.find((entry) => entry.provider === '9router')?.configured === true} saveProviderKey={saveProviderKey} validateProviderKey={validateProviderKey} testing={testingProvider === '9router'} keyTest={keyTest} t={t} />
+                </section>
+                {settingsNote && <p role="status" className="beranda-note">{settingsNote}</p>}
               </section>
-              {settingsNote && <p role="status" className="beranda-note">{settingsNote}</p>}
-            </fieldset>
+            </div>
           </section>
         </div>
       )}

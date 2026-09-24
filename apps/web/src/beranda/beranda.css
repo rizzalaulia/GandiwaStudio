@@ -774,6 +774,12 @@ html.gandiwa-night #root {
   background: rgba(248, 113, 113, 0.08);
 }
 
+.beranda-keytest-account {
+  color: #fb923c;
+  border-color: rgba(251, 146, 60, 0.35);
+  background: rgba(251, 146, 60, 0.08);
+}
+
 .beranda-keytest-unreachable,
 .beranda-keytest-error {
   color: #facc15;
@@ -790,6 +796,11 @@ html.gandiwa-night #root {
 .beranda-btn-test.beranda-keytest-rejected {
   color: #f87171;
   border-color: rgba(248, 113, 113, 0.5);
+}
+
+.beranda-btn-test.beranda-keytest-account {
+  color: #fb923c;
+  border-color: rgba(251, 146, 60, 0.5);
 }
 
 .beranda-btn-test.beranda-keytest-unreachable,
@@ -822,6 +833,10 @@ html.gandiwa-night #root {
 
 .beranda-night .beranda-keytest-rejected {
   color: #f87171;
+}
+
+.beranda-night .beranda-keytest-account {
+  color: #fb923c;
 }
 
 .beranda-night .beranda-keytest-unreachable,
@@ -865,4 +880,134 @@ html.gandiwa-night #root {
 
 .beranda-night .beranda-cancel-job {
   color: #f87171;
+}
+
+/* --- Setelan: hallmark ledger dua zona (24 Sep, Varian A) ---
+   Hallmark · macrostructure: Workbench (ledger dua zona) · genre: modern-minimal
+   design-system: docs/DESIGN.md (managed) · designed-as-app
+   Zona kiri mast arang (judul, tujuan, status hidup provider); kanan ledger
+   terang dengan semua pilihan terlihat sekaligus — tanpa tab. */
+.beranda-settings-desk {
+  width: min(780px, 100%);
+  padding: 0;
+  display: grid;
+  grid-template-columns: 248px minmax(0, 1fr);
+}
+
+.beranda-settings-mast {
+  background: #18212f;
+  color: #e5edf8;
+  padding: 20px 20px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.beranda-settings-mast-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.beranda-settings-mast-head h2 {
+  margin: 0;
+  font-size: 1.15rem;
+  letter-spacing: -0.01em;
+  color: #f4f7fc;
+}
+
+.beranda-settings-purpose {
+  margin: 0;
+  color: #aab9cb;
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+
+.beranda-settings-live {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.beranda-settings-live li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8rem;
+  color: #cbd8e8;
+}
+
+.beranda-settings-live b {
+  margin-left: auto;
+  font-weight: 600;
+  color: #e5edf8;
+  text-align: right;
+}
+
+.beranda-settings-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex: none;
+}
+
+.beranda-settings-dot-ok {
+  background: #4ade80;
+}
+
+.beranda-settings-dot-warn {
+  background: #facc15;
+}
+
+.beranda-settings-ledger {
+  padding: 18px 24px 22px;
+  max-height: min(76vh, 680px);
+  overflow: auto;
+}
+
+.beranda-settings-ledger section {
+  padding: 14px 0 18px;
+}
+
+.beranda-settings-ledger section + section {
+  border-top: 1px solid var(--line);
+}
+
+.beranda-settings-ledger h4 {
+  margin: 0 0 12px;
+  font-size: 0.78rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.beranda-night .beranda-settings-desk {
+  background: #131a24;
+}
+
+.beranda-night .beranda-settings-mast {
+  background: #0f1622;
+}
+
+.beranda-night .beranda-settings-purpose,
+.beranda-night .beranda-settings-live li {
+  color: #aab9cb;
+}
+
+.beranda-night .beranda-settings-ledger section + section {
+  border-top-color: #263548;
+}
+
+@media (max-width: 720px) {
+  .beranda-settings-desk {
+    grid-template-columns: 1fr;
+  }
+
+  .beranda-settings-mast {
+    flex-direction: column;
+  }
 }
