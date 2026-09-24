@@ -1,7 +1,6 @@
 /* eslint-disable @typescript-eslint/require-await */
 import { describe, expect, it } from 'vitest'
 import { loadApproval, saveApproval } from './approval-store'
-
 type Node = { files: Map<string, { content: string }>; dirs: Map<string, Node> }
 const node = (): Node => ({ files: new Map(), dirs: new Map() })
 const directory = (root: Node) => ({
@@ -69,5 +68,52 @@ describe('approval store', () => {
     const d = directory(root)
     const saved = await saveApproval({ directory: d, manifestSnapshot: '{}', metadataSnapshot: 'metadata', auditSnapshot: 'audit', record })
     await expect(saveApproval({ directory: d, manifestSnapshot: '{}', metadataSnapshot: 'metadata', auditSnapshot: 'audit', record: { ...record, approvedAt: '2026-09-13T00:00:01.000Z' }, existingSnapshot: `${saved.snapshot}changed` })).rejects.toThrow(/changed externally/)
+  })
+})
+
+describe('approval master-binding contract', () => {
+  const masterRoot = () => {
+    const root = node()
+    root.files.set('gandiwa-project.json', { content: '{}' })
+    root.dirs.set('metadata', node())
+    root.dirs.get('metadata')!.files.set(`${id}.json`, { content: 'metadata' })
+    root.dirs.set('reports', node())
+    root.dirs.get('reports')!.dirs.set('audits', node())
+    root.dirs.get('reports')!.dirs.get('audits')!.files.set(`${id}-r2.json`, { content: 'audit' })
+    root.dirs.get('reports')!.dirs.set('approvals', node())
+    return root
+  }
+
+  it('saves the approval only when the master sidecar matches the supplied snapshot exactly', async () => {
+    const root = masterRoot()
+    const snapshot = `${JSON.stringify({ schemaVersion: 1, assetId: id, revision: 2, relativePath: `revisions/${id}/rev-2.png`, revisionChecksum: 'a'.repeat(64), selectedAt: '2026-09-20T00:00:00.000Z', selectedBy: 'Master Peng' })}\n`
+    root.dirs.get('reports')!.files.set('master-selection.json', { content: snapshot })
+    const saved = await saveApproval({
+      directory: directory(root), manifestSnapshot: '{}', metadataSnapshot: 'metadata', auditSnapshot: 'audit',
+      masterSelectionSnapshot: snapshot, record,
+    })
+    expect(saved.record.revision).toBe(2)
+    expect((await loadApproval(directory(root), id, 2))?.snapshot).toBe(saved.snapshot)
+  })
+
+  it('blocks approval when the on-disk master sidecar drifted from the snapshot seen in the UI', async () => {
+    const root = masterRoot()
+    root.dirs.get('reports')!.files.set('master-selection.json', { content: 'master-selection-drifted' })
+    await expect(saveApproval({
+      directory: directory(root), manifestSnapshot: '{}', metadataSnapshot: 'metadata', auditSnapshot: 'audit',
+      masterSelectionSnapshot: 'master-selection-exact', record,
+    })).rejects.toThrow(/master selection changed externally/)
+    expect(await loadApproval(directory(root), id, 2)).toBeUndefined()
+  })
+
+  it('blocks approval of a revision that is not the currently selected master', async () => {
+    const root = masterRoot()
+    const masterRecord = { schemaVersion: 1, assetId: id, revision: 1, relativePath: `revisions/${id}/rev-1.png`, revisionChecksum: 'a'.repeat(64), selectedAt: '2026-09-20T00:00:00.000Z', selectedBy: 'Master Peng' }
+    root.dirs.get('reports')!.files.set('master-selection.json', { content: `${JSON.stringify(masterRecord)}\n` })
+    await expect(saveApproval({
+      directory: directory(root), manifestSnapshot: '{}', metadataSnapshot: 'metadata', auditSnapshot: 'audit',
+      masterSelectionSnapshot: `${JSON.stringify(masterRecord)}\n`, record,
+    })).rejects.toThrow(/not the selected master revision/)
+    expect(await loadApproval(directory(root), id, 2)).toBeUndefined()
   })
 })

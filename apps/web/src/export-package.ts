@@ -184,6 +184,12 @@ export async function resolveExportPackageCandidate(input: Readonly<{
   if (!savedAudit) throw new Error('durable audit is missing; export is blocked')
   const savedApproval = await loadApproval(input.directory, input.assetId, input.revision)
   if (!savedApproval) throw new Error('human approval is missing; export is blocked')
+  const { peekMasterSelection } = await import('./master-selection-store')
+  const master = await peekMasterSelection(input.directory)
+  if (master === undefined) throw new Error('master selection is missing; export is blocked')
+  if (master.record.assetId !== input.assetId || master.record.revision !== input.revision) throw new Error('master selection does not name the exported revision; export is blocked')
+  const exportedRevision = input.manifest.assets.find((asset) => asset.asset_id === input.assetId)?.revisions.find((candidate) => candidate.revision === input.revision)
+  if (!exportedRevision || exportedRevision.relative_path !== master.record.relativePath) throw new Error('master selection does not match the exported revision path; export is blocked')
   const gate = evaluateApprovalGate({
     assetId: submission.assetId,
     revision: submission.revision,

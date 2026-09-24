@@ -72,6 +72,22 @@ let createdSidecar = false
 
 function fakeProjectDirectory(overrides: { manifestText?: string } = {}): unknown {
   const manifestText = overrides.manifestText ?? MANIFEST_TEXT
+  const revisionNames = new Set<string>()
+  try {
+    const parsed = JSON.parse(manifestText) as { assets?: Array<{ revisions?: Array<{ relative_path?: string }> }> }
+    for (const asset of parsed.assets ?? []) {
+      for (const revision of asset.revisions ?? []) {
+        const name = revision.relative_path?.split('/').at(-1)
+        if (name) revisionNames.add(name)
+      }
+    }
+  } catch {
+    // Invalid-manifest tests intentionally keep revision storage empty.
+  }
+  const revisionBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4])
+  let masterSelectionText: string | undefined
+  let metadataText: string | undefined
+  let auditText: string | undefined
   return {
     getFileHandle: (name: string, options?: { create?: boolean }) => {
       if (name === 'gandiwa-project.json' && options?.create !== true) {
@@ -102,9 +118,84 @@ function fakeProjectDirectory(overrides: { manifestText?: string } = {}): unknow
                   }),
                 })
               }
+              if (revisionNames.has(fileName)) {
+                return Promise.resolve({
+                  getFile: () => Promise.resolve({
+                    type: 'image/png',
+                    text: () => Promise.resolve(''),
+                    arrayBuffer: () => Promise.resolve(revisionBytes.slice().buffer),
+                  }),
+                })
+              }
               return Promise.reject(new DOMException('missing', 'NotFoundError'))
             },
           }),
+        })
+      }
+      if (name === 'reports') {
+        return Promise.resolve({
+          getDirectoryHandle: (directoryName: string) => {
+            if (directoryName !== 'audits') return Promise.reject(new DOMException('missing', 'NotFoundError'))
+            return Promise.resolve({
+              getFileHandle: (_fileName: string, options?: { create?: boolean }) => {
+                if (options?.create === true) {
+                  return Promise.resolve({
+                    getFile: () => Promise.resolve({ text: () => Promise.resolve(auditText ?? '') }),
+                    createWritable: () => Promise.resolve({
+                      write: (value: string) => { auditText = value; return Promise.resolve() },
+                      close: () => Promise.resolve(),
+                    }),
+                  })
+                }
+                return auditText === undefined
+                  ? Promise.reject(new DOMException('missing', 'NotFoundError'))
+                  : Promise.resolve({ getFile: () => Promise.resolve({ text: () => Promise.resolve(auditText) }) })
+              },
+            })
+          },
+          getFileHandle: (fileName: string, options?: { create?: boolean }) => {
+            if (fileName !== 'master-selection.json') {
+              return Promise.reject(new DOMException('missing', 'NotFoundError'))
+            }
+            if (options?.create === true) {
+              return Promise.resolve({
+                getFile: () => Promise.resolve({
+                  text: () => Promise.resolve(masterSelectionText ?? ''),
+                  arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+                }),
+                createWritable: () => Promise.resolve({
+                  write: (value: string) => { masterSelectionText = value; return Promise.resolve() },
+                  close: () => Promise.resolve(),
+                }),
+              })
+            }
+            return masterSelectionText === undefined
+              ? Promise.reject(new DOMException('missing', 'NotFoundError'))
+              : Promise.resolve({
+                  getFile: () => Promise.resolve({
+                    text: () => Promise.resolve(masterSelectionText),
+                    arrayBuffer: () => Promise.resolve(new TextEncoder().encode(masterSelectionText).buffer),
+                  }),
+                })
+          },
+        })
+      }
+      if (name === 'metadata') {
+        return Promise.resolve({
+          getFileHandle: (_fileName: string, options?: { create?: boolean }) => {
+            if (options?.create === true) {
+              return Promise.resolve({
+                getFile: () => Promise.resolve({ text: () => Promise.resolve(metadataText ?? '') }),
+                createWritable: () => Promise.resolve({
+                  write: (value: string) => { metadataText = value; return Promise.resolve() },
+                  close: () => Promise.resolve(),
+                }),
+              })
+            }
+            return metadataText === undefined
+              ? Promise.reject(new DOMException('missing', 'NotFoundError'))
+              : Promise.resolve({ getFile: () => Promise.resolve({ text: () => Promise.resolve(metadataText) }) })
+          },
         })
       }
       if (name === 'creative-sessions') {
@@ -119,7 +210,7 @@ function fakeProjectDirectory(overrides: { manifestText?: string } = {}): unknow
                 }),
               })
             }
-            // Existing sidecar reads:되after a first write the file exists.
+            // Existing sidecar reads: after a first write the file exists.
             return createdSidecar
               ? Promise.resolve({ getFile: () => Promise.resolve({ text: () => Promise.resolve(sidecarText) }) })
               : Promise.reject(new DOMException('missing', 'NotFoundError'))
@@ -312,7 +403,7 @@ describe('Beranda — meja kerja studio', () => {
       configurable: true,
       value: vi.fn(() => Promise.resolve(rememberedDirectory)),
     })
-    render(<BerandaApp />)
+    const firstMount = render(<BerandaApp />)
     fireEvent.click(screen.getByRole('button', { name: 'Buka proyek' }))
     await waitFor(() => expect(screen.getByRole('toolbar')).toHaveTextContent('dibuka secara lokal'))
 
@@ -327,9 +418,16 @@ describe('Beranda — meja kerja studio', () => {
     const rev2 = screen.getByRole('option', { name: /rev-2/ })
     fireEvent.click(rev1)
     fireEvent.click(screen.getByRole('button', { name: 'Jadikan revisi terpilih sebagai master' }))
-    expect(screen.getByRole('status', { name: 'Master revisi' })).toHaveTextContent('rev-1')
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Master revisi' })).toHaveTextContent('rev-1'))
+    expect(screen.getByRole('status', { name: 'Master revisi' })).toHaveTextContent('tersimpan')
     expect(rev1).toHaveAttribute('data-master', 'true')
     expect(rev2).toHaveAttribute('data-master', 'false')
+
+    firstMount.unmount()
+    render(<BerandaApp />)
+    fireEvent.click(screen.getByRole('button', { name: 'Buka proyek' }))
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Master revisi' })).toHaveTextContent(/rev-1.*tersimpan/))
+    expect(screen.getByRole('option', { name: /rev-1/ })).toHaveAttribute('data-master', 'true')
   })
 
   it('improves generate continuity by preselecting the latest asset revision after reopen', async () => {
@@ -538,6 +636,160 @@ describe('Beranda — meja kerja studio', () => {
 
     await waitFor(() => expect(screen.getByRole('log')).toHaveTextContent(/project manifest changed externally/))
     expect(screen.getByRole('log')).not.toHaveTextContent('terkirim')
+  })
+
+  it('persists metadata and a durable FAIL audit across reopen instead of trusting fresh UI state', async () => {
+    const ASSET_ID = '1e5c8a02-7b34-4c19-9e2a-6d0f3b8c5a71'
+    const manifestWithAsset = JSON.stringify({
+      schema_version: 1,
+      project_id: '3f2b8a64-9c1d-4e7a-b2f5-8d60c1a94e21',
+      project_name: 'Demo Stok',
+      assets: [{
+        asset_id: ASSET_ID,
+        content_type: 'illustration',
+        creation_method: 'generative_ai',
+        revisions: [
+          { revision: 1, generation_format: 'png', working_format: 'png', master_format: 'png', submission_format: 'jpeg', relative_path: `revisions/${ASSET_ID}/rev-1.png` },
+        ],
+      }],
+    })
+    rememberedDirectory = fakeProjectDirectory({ manifestText: manifestWithAsset })
+    Object.defineProperty(window, 'showDirectoryPicker', {
+      configurable: true,
+      value: vi.fn(() => Promise.resolve(rememberedDirectory)),
+    })
+    // Real pipeline preflight: PNG report stays a soft verdict, but the
+    // submission-format rule blocks export until bytes are JPEG-ready.
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = input instanceof URL ? input.href : typeof input === 'string' ? input : input.url
+      if (url.endsWith('/api/v1/auth/csrf')) {
+        return Promise.resolve(new Response(JSON.stringify({ csrf_token: 'csrf-ui-1' }), { status: 200 }))
+      }
+      if (url.startsWith('/api/v1/raster/preflight?')) {
+        return Promise.resolve(new Response(JSON.stringify({
+          verdict: 'warning',
+          detected_mime_type: 'image/png',
+          detected_extension: 'png',
+          width: 2000,
+          height: 2000,
+          megapixels: 4,
+          has_alpha: false,
+          eligible_for_submission: false,
+          findings: [{ rule_id: 'illustration-raster.submission-format', message: 'Final submission must be JPEG.' }],
+        }), { status: 200 }))
+      }
+      return Promise.reject(new Error(`unexpected request: ${url}`))
+    }))
+
+    const firstMount = render(<BerandaApp />)
+    fireEvent.click(screen.getByRole('button', { name: 'Buka proyek' }))
+    await waitFor(() => expect(screen.getByRole('toolbar')).toHaveTextContent('dibuka secara lokal'))
+
+    fireEvent.change(screen.getByLabelText('Judul'), { target: { value: 'Ceramic cup with soft studio light' } })
+    fireEvent.change(screen.getByLabelText('Kata kunci (dipisah koma)'), { target: { value: 'ceramic, cup, studio, minimal, illustration' } })
+    fireEvent.change(screen.getByLabelText('Kategori metadata'), { target: { value: 'Objects' } })
+    fireEvent.change(screen.getByLabelText('Disclosure AI'), { target: { value: 'Created with generative AI.' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Simpan metadata revisi' }))
+    await waitFor(() => expect(screen.getByText(/Metadata tersimpan/)).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Jalankan preflight revisi' }))
+    const auditRegion = screen.getByRole('region', { name: 'Audit revisi aktif' })
+    await waitFor(() => expect(auditRegion).toHaveTextContent('FAIL'))
+    expect(auditRegion).toHaveTextContent('FAIL · illustration-raster.submission-format')
+    expect(auditRegion).toHaveTextContent('Final submission must be JPEG.')
+
+    // Durable proof: evidence must survive unmount by loading from the
+    // sidecars, never from fresh in-memory state.
+    firstMount.unmount()
+    render(<BerandaApp />)
+    fireEvent.click(screen.getByRole('button', { name: 'Buka proyek' }))
+    const reopenedAudit = screen.getByRole('region', { name: 'Audit revisi aktif' })
+    await waitFor(() => expect(reopenedAudit).toHaveTextContent('FAIL'))
+    expect(reopenedAudit).toHaveTextContent('FAIL · illustration-raster.submission-format')
+    expect(screen.getByLabelText('Judul')).toHaveValue('Ceramic cup with soft studio light')
+    expect(screen.getByRole('button', { name: 'Jalankan preflight revisi' })).toBeEnabled()
+  })
+
+  it('does not wedge the audit button when a metadata save invalidates a pending preflight', async () => {
+    const ASSET_ID = '1e5c8a02-7b34-4c19-9e2a-6d0f3b8c5a71'
+    const manifestWithAsset = JSON.stringify({
+      schema_version: 1,
+      project_id: '3f2b8a64-9c1d-4e7a-b2f5-8d60c1a94e21',
+      project_name: 'Demo Stok',
+      assets: [{
+        asset_id: ASSET_ID,
+        content_type: 'illustration',
+        creation_method: 'generative_ai',
+        revisions: [
+          { revision: 1, generation_format: 'png', working_format: 'png', master_format: 'png', submission_format: 'jpeg', relative_path: `revisions/${ASSET_ID}/rev-1.png` },
+        ],
+      }],
+    })
+    rememberedDirectory = fakeProjectDirectory({ manifestText: manifestWithAsset })
+    Object.defineProperty(window, 'showDirectoryPicker', {
+      configurable: true,
+      value: vi.fn(() => Promise.resolve(rememberedDirectory)),
+    })
+    // First preflight call hangs until the test releases it: the metadata
+    // save must invalidate that run mid-flight WITHOUT wedging the button.
+    let resolveFirstPreflight: (response: Response) => void = () => undefined
+    let preflightCalls = 0
+    const preflightReport = () => new Response(JSON.stringify({
+      verdict: 'warning',
+      detected_mime_type: 'image/png',
+      detected_extension: 'png',
+      width: 2000,
+      height: 2000,
+      megapixels: 4,
+      has_alpha: false,
+      eligible_for_submission: false,
+      findings: [{ rule_id: 'illustration-raster.submission-format', message: 'Final submission must be JPEG.' }],
+    }), { status: 200 })
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = input instanceof URL ? input.href : typeof input === 'string' ? input : input.url
+      if (url.endsWith('/api/v1/auth/csrf')) {
+        return Promise.resolve(new Response(JSON.stringify({ csrf_token: 'csrf-ui-1' }), { status: 200 }))
+      }
+      if (url.startsWith('/api/v1/raster/preflight?')) {
+        preflightCalls += 1
+        if (preflightCalls === 1) {
+          return new Promise<Response>((resolve) => { resolveFirstPreflight = resolve })
+        }
+        return Promise.resolve(preflightReport())
+      }
+      return Promise.reject(new Error(`unexpected request: ${url}`))
+    }))
+
+    render(<BerandaApp />)
+    fireEvent.click(screen.getByRole('button', { name: 'Buka proyek' }))
+    await waitFor(() => expect(screen.getByRole('toolbar')).toHaveTextContent('dibuka secara lokal'))
+
+    // Metadata must exist before audit may run (audit binds metadata).
+    fireEvent.change(screen.getByLabelText('Judul'), { target: { value: 'Ceramic cup with soft studio light' } })
+    fireEvent.change(screen.getByLabelText('Kata kunci (dipisah koma)'), { target: { value: 'ceramic, cup, studio, minimal, illustration' } })
+    fireEvent.change(screen.getByLabelText('Kategori metadata'), { target: { value: 'Objects' } })
+    fireEvent.change(screen.getByLabelText('Disclosure AI'), { target: { value: 'Created with generative AI.' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Simpan metadata revisi' }))
+    await waitFor(() => expect(screen.getByText(/Metadata tersimpan/)).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Jalankan preflight revisi' }))
+    await waitFor(() => expect(screen.getByText('Menjalankan audit…')).toBeInTheDocument())
+
+    // Sibling path bumps the audit sequence while the preflight is in flight.
+    fireEvent.change(screen.getByLabelText('Judul'), { target: { value: 'Ceramic cup under warmer light' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Simpan metadata revisi' }))
+    await waitFor(() => expect(screen.getByText(/Metadata tersimpan/)).toBeInTheDocument())
+
+    // The invalidating save must release the audit button immediately —
+    // not wait for the abandoned run's network promise to settle.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Jalankan preflight revisi' })).toBeEnabled(), { timeout: 2000 })
+
+    // When the abandoned preflight finally settles, it must not resurrect
+    // audit state: still STALE, and no "tersimpan" message from the dead run.
+    resolveFirstPreflight(preflightReport())
+    await new Promise((resolve) => { setTimeout(resolve, 50) })
+    expect(screen.queryByText(/tersimpan untuk rev-1/)).not.toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Audit revisi aktif' })).toHaveTextContent('STALE')
   })
 })
 

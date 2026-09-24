@@ -70,9 +70,17 @@ describe('approved creative session adapter', () => {
     }
 
     await expect(buildApprovedCreativeJob({ ...input, previousSession })).rejects.toThrow(/Regenerate identik ditolak/)
-    const allowed = await buildApprovedCreativeJob({ ...input, previousSession, rejectionReason: 'Komposisi terlalu padat.' })
+    const allowedInput = { ...input, previousSession, rejectionReason: 'Komposisi terlalu padat.' }
+    const allowed = await buildApprovedCreativeJob(allowedInput)
+    const browserRetry = await buildApprovedCreativeJob(allowedInput)
+    const nextIntentionalAttempt = await buildApprovedCreativeJob({
+      ...allowedInput,
+      approvedAt: '2026-09-22T00:05:00.000Z',
+    })
     expect(allowed.sidecar.revisions).toHaveLength(1)
     expect(allowed.sidecar.approvals).toHaveLength(2)
     expect(allowed.payload.idempotency_key).not.toBe(first.payload.idempotency_key)
+    expect(browserRetry.payload.idempotency_key).toBe(allowed.payload.idempotency_key)
+    expect(nextIntentionalAttempt.payload.idempotency_key).not.toBe(allowed.payload.idempotency_key)
   })
 })

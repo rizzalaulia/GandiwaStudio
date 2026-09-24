@@ -64,7 +64,7 @@ async function hashFixture(value: string | Uint8Array): Promise<string> {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
-async function approvedFixture(format: 'jpeg' | 'svg') {
+async function approvedFixture(format: 'jpeg' | 'svg', master: 'current' | 'other' | 'none' = 'current') {
   const root = node()
   const submissionBytes = format === 'jpeg'
     ? new Uint8Array([0xff, 0xd8, 0xff, 0xd9])
@@ -85,6 +85,19 @@ async function approvedFixture(format: 'jpeg' | 'svg') {
   const approvalSnapshot = JSON.stringify({ schemaVersion: 1, status: 'APPROVED', assetId, revision: 2, submissionChecksum, metadataChecksum, auditChecksum, rulesetId: 'adobe-stock-2026-09-08-v1', rulesetVersion: 'adobe-stock-2026-09-08-v1', approvedAt: '2026-09-13T00:00:00.000Z', statementVersion: 1 }) + '\n'
   const reports = node(); const audits = node(); const approvals = node()
   audits.files.set(`${assetId}-r2.json`, new File([auditSnapshot], `${assetId}-r2.json`)); approvals.files.set(`${assetId}-r2.json`, new File([approvalSnapshot], `${assetId}-r2.json`)); reports.dirs.set('audits', audits); reports.dirs.set('approvals', approvals); root.dirs.set('reports', reports)
+  if (master === 'current') {
+    const masterRecord = { schemaVersion: 1, assetId, revision: 2, relativePath: `revisions/${assetId}/2/master.${format}`, revisionChecksum: submissionChecksum, selectedAt: '2026-09-13T00:00:00.000Z', selectedBy: 'Master Peng' }
+    reports.files.set('master-selection.json', new File([`${JSON.stringify(masterRecord)}\n`], 'master-selection.json'))
+  }
+  if (master === 'other') {
+    const otherBytes = new Uint8Array([0x11, 0x22, 0x33, 0x44])
+    const otherChecksum = await hashFixture(otherBytes)
+    const otherRevision = node(); const assetDirectory = revisions.dirs.get(assetId)!
+    otherRevision.files.set('master.jpeg', new File([otherBytes], 'master.jpeg'))
+    assetDirectory.dirs.set('1', otherRevision)
+    const masterRecord = { schemaVersion: 1, assetId, revision: 1, relativePath: `revisions/${assetId}/1/master.jpeg`, revisionChecksum: otherChecksum, selectedAt: '2026-09-13T00:00:00.000Z', selectedBy: 'Master Peng' }
+    reports.files.set('master-selection.json', new File([`${JSON.stringify(masterRecord)}\n`], 'master-selection.json'))
+  }
   return { root, manifest, manifestSnapshot, submissionChecksum, metadataChecksum, auditSnapshot, auditChecksum, approvalSnapshot }
 }
 
@@ -259,6 +272,29 @@ describe('export package contract', () => {
     audit.files.set(`${assetId}-r2.json`, new File(['{"findings":[null]}'], `${assetId}-r2.json`))
     const { resolveExportPackageCandidate } = await import('./export-package')
     await expect(resolveExportPackageCandidate({ directory: directory(fixture.root) as never, manifest: fixture.manifest, manifestSnapshot: fixture.manifestSnapshot, assetId, revision: 2 })).rejects.toThrow(/audit/i)
+  })
+
+  it('rejects an export when no master revision was ever selected', async () => {
+    const fixture = await approvedFixture('jpeg', 'none')
+    const { resolveExportPackageCandidate } = await import('./export-package')
+    await expect(resolveExportPackageCandidate({ directory: directory(fixture.root) as never, manifest: fixture.manifest, manifestSnapshot: fixture.manifestSnapshot, assetId, revision: 2 }))
+      .rejects.toThrow(/master selection/i)
+  })
+
+  it('rejects an export when the selected master is a different revision', async () => {
+    const fixture = await approvedFixture('jpeg', 'other')
+    const { resolveExportPackageCandidate } = await import('./export-package')
+    await expect(resolveExportPackageCandidate({ directory: directory(fixture.root) as never, manifest: fixture.manifest, manifestSnapshot: fixture.manifestSnapshot, assetId, revision: 2 }))
+      .rejects.toThrow(/master selection/i)
+  })
+
+  it('re-verifies the master binding when revision bytes drift from the sidecar', async () => {
+    const fixture = await approvedFixture('jpeg')
+    const revisionDirectory = fixture.root.dirs.get('revisions')!.dirs.get(assetId)!.dirs.get('2')!
+    revisionDirectory.files.set('master.jpeg', new File([new Uint8Array([0xde, 0xad, 0xbe, 0xef])], 'master.jpeg'))
+    const { resolveExportPackageCandidate } = await import('./export-package')
+    await expect(resolveExportPackageCandidate({ directory: directory(fixture.root) as never, manifest: fixture.manifest, manifestSnapshot: fixture.manifestSnapshot, assetId, revision: 2 }))
+      .rejects.toThrow(/master|submission|stale/i)
   })
 
   it('rejects an externally changed manifest before reading export evidence', async () => {

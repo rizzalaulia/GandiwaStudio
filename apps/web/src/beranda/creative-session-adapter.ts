@@ -98,10 +98,11 @@ export async function buildApprovedCreativeJob(input: ApprovedCreativeInput): Pr
     throw new Error('Regenerate identik ditolak: ubah prompt secara bermakna atau catat alasan penolakan.')
   }
   // An explicitly justified identical regenerate is a new paid job, not an
-  // idempotent replay of rev-N. Keep promptDigest bound to the exact prompt,
-  // while the queue identity also binds the human rejection reason.
+  // idempotent replay of rev-N. The approval timestamp is the stable identity
+  // of one human-approved attempt: retries of the same payload stay idempotent,
+  // while a later approval using the same reason creates a distinct job.
   const dispatchDigest = rejectionReason
-    ? await sha256(`${promptDigest}:${rejectionReason}`)
+    ? await sha256(`${promptDigest}:${rejectionReason}:${input.approvedAt}`)
     : promptDigest
   const sidecar: CreativeSessionSidecar = {
     schemaVersion: 1,

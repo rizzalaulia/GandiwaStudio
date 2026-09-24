@@ -14,6 +14,7 @@ import { resolveApprovalSubmission, type ApprovalSubmission, type SubmissionDire
 import { evaluateApprovalGate, type ApprovalGateResult, type DurableAuditSnapshot, type ApprovalRecord } from './approval-gate'
 import type { AuditDirectory } from './durable-audit-store'
 import { resolveExportPackageCandidate, writeExportPackage, type ExportPackageCandidate } from './export-package'
+import { isSameMasterEvidence, loadMasterSelection, peekMasterSelection, type LoadedMasterSelection, type MasterSelectionDirectory } from './master-selection-store'
 import { getGuidedWorkflowPresentation, type GuidedWorkflowInput } from './workflow/guided-workflow'
 import {
   clearSelectedInstance,
@@ -40,8 +41,23 @@ export function isCurrentExport(operationId: number, currentSequence: number, ex
   return operationId === currentSequence && expectedProject === activeProject
 }
 
+function asMasterDirectory(directory: unknown): MasterSelectionDirectory {
+  return directory as MasterSelectionDirectory
+}
+
+export function isApprovalBlockedForMaster(master: { record: { assetId: string; revision: number } } | null | undefined, assetId: string, revision: number): string | null {
+  if (master === undefined) return 'Master selection could not be verified. Reopen the project and select master again.'
+  if (master === null) return 'No master revision is selected. Select master before approval.'
+  if (master.record.assetId !== assetId || master.record.revision !== revision) return 'Selected master revision changed. Re-select master and approve again.'
+  return null
+}
+
 export function isSameApprovalEvidence(left: Readonly<{ submissionChecksum: string; metadataChecksum: string }>, right: Readonly<{ submissionChecksum: string; metadataChecksum: string }>): boolean {
   return left.submissionChecksum === right.submissionChecksum && left.metadataChecksum === right.metadataChecksum
+}
+
+export function isSameApprovalMasterSnapshot(left: LoadedMasterSelection | undefined, right: LoadedMasterSelection | undefined): boolean {
+  return isSameMasterEvidence(left, right)
 }
 
 function auditFromSvgReport(report: SvgPreflightReport, identity: Readonly<{ revisionId: string; checksum: string }>): AuditCenterResult {
@@ -280,6 +296,7 @@ export function App() {
   const [approvalSubmission, setApprovalSubmission] = useState<ApprovalSubmission | null>(null)
   const [approvalGate, setApprovalGate] = useState<ApprovalGateResult>({ status: 'NOT READY', adobeReady: false, exportGate: 'BLOCKED', reasons: ['No active asset revision exists.'] })
   const [approvalMessage, setApprovalMessage] = useState<string | null>(null)
+  const [masterSelection, setMasterSelection] = useState<LoadedMasterSelection | null | undefined>(undefined)
   const [isApprovalBusy, setApprovalBusy] = useState(false)
   const [isExporting, setExporting] = useState(false)
   const [exportMessage, setExportMessage] = useState<string | null>(null)
@@ -425,6 +442,21 @@ export function App() {
 
   const refreshApprovalContext = async (project: ActiveProject, metadata: LoadedStockMetadata | null = loadedMetadata) => {
     const contextId = ++approvalContextSequence.current
+    setMasterSelection(undefined)
+    try {
+      const loadedMaster = await peekMasterSelection(project.directory as unknown as MasterSelectionDirectory)
+      if (activeProjectRef.current === project && contextId === approvalContextSequence.current) setMasterSelection(loadedMaster ?? null)
+      else return
+    } catch (cause) {
+      if (activeProjectRef.current === project && contextId === approvalContextSequence.current) {
+        setMasterSelection(undefined)
+        setApprovalGate({
+          status: 'STALE / BLOCKED', adobeReady: false, exportGate: 'BLOCKED',
+          reasons: [cause instanceof Error ? cause.message : 'Master selection could not be verified.'],
+        })
+      }
+      return
+    }
     const asset = project.manifest.assets.at(-1)
     const revision = asset?.revisions.at(-1)
     if (!asset || !revision || !metadata) {
@@ -513,7 +545,7 @@ export function App() {
     } catch (cause) {
       if (isCurrentPreflight(requestId, preflightSequence.current)) setApprovalMessage(cause instanceof Error ? cause.message : 'Audit could not be saved.')
     } finally {
-      if (isCurrentPreflight(requestId, preflightSequence.current)) setApprovalBusy(false)
+      setApprovalBusy(false)
     }
   }
 
@@ -522,6 +554,11 @@ export function App() {
     const asset = project?.manifest.assets.at(-1)
     const revision = asset?.revisions.at(-1)
     if (!project || !asset || !revision || !durableAudit || !loadedMetadata || approvalGate.status !== 'READY FOR HUMAN APPROVAL') return
+    const masterPrecheck = isApprovalBlockedForMaster(masterSelection, asset.asset_id, revision.revision)
+    if (masterPrecheck) {
+      setApprovalMessage(masterPrecheck)
+      return
+    }
     setApprovalBusy(true)
     setApprovalMessage(null)
     const operationId = ++approvalOperationSequence.current
@@ -533,6 +570,11 @@ export function App() {
       const loadedAudit = await loadDurableAudit(directory, asset.asset_id, revision.revision)
       if (!isCurrentApproval()) return
       if (!loadedAudit) throw new Error('Audit evidence changed or disappeared. Approval was blocked.')
+      if (!isCurrentApproval()) return
+      const masterAtRead = await loadMasterSelection(asMasterDirectory(directory), project.manifestSnapshot)
+      if (!isCurrentApproval()) return
+      const masterBlocker = isApprovalBlockedForMaster(masterAtRead, submission.assetId, submission.revision)
+      if (masterBlocker) throw new Error(masterBlocker)
       const currentGate = evaluateApprovalGate({ assetId: submission.assetId, revision: submission.revision, submissionChecksum: submission.submissionChecksum, metadataChecksum: submission.metadataChecksum, auditChecksum: loadedAudit.checksum, rulesetId: AUDIT_RULESET_ID, rulesetVersion: AUDIT_RULESET_VERSION, metadataValid: true, audit: loadedAudit.audit })
       if (currentGate.status !== 'READY FOR HUMAN APPROVAL') { setApprovalGate(currentGate); throw new Error('Approval evidence became stale. Run audit again.') }
       if (!(await requestProjectWritePermission(project.directory))) throw new Error('Write permission was not granted. Approval was not saved.')
@@ -540,8 +582,10 @@ export function App() {
       const currentSubmission = await resolveApprovalSubmission({ directory, manifest: project.manifest, manifestSnapshot: project.manifestSnapshot, assetId: asset.asset_id, revision: revision.revision })
       if (!isCurrentApproval()) return
       if (!isSameApprovalEvidence(submission, currentSubmission)) throw new Error('Prepared revision or metadata changed during approval. Run audit again.')
+      if (!isCurrentApproval()) return
+      if (!isSameApprovalMasterSnapshot(masterAtRead, await loadMasterSelection(asMasterDirectory(directory), project.manifestSnapshot))) throw new Error('master selection changed externally; reload before saving approval')
       const record: ApprovalRecord = { schemaVersion: 1, status: 'APPROVED', assetId: currentSubmission.assetId, revision: currentSubmission.revision, submissionChecksum: currentSubmission.submissionChecksum, metadataChecksum: currentSubmission.metadataChecksum, auditChecksum: loadedAudit.checksum, rulesetId: AUDIT_RULESET_ID, rulesetVersion: AUDIT_RULESET_VERSION, approvedAt: new Date().toISOString(), statementVersion: 1 }
-      const saved = await saveApproval({ directory, manifestSnapshot: project.manifestSnapshot, metadataSnapshot: loadedMetadata.snapshot, auditSnapshot: loadedAudit.snapshot, record, ...(previousApprovalSnapshot !== undefined ? { existingSnapshot: previousApprovalSnapshot } : {}) })
+      const saved = await saveApproval({ directory, manifestSnapshot: project.manifestSnapshot, metadataSnapshot: loadedMetadata.snapshot, auditSnapshot: loadedAudit.snapshot, ...(masterAtRead ? { masterSelectionSnapshot: masterAtRead.snapshot } : {}), record, ...(previousApprovalSnapshot !== undefined ? { existingSnapshot: previousApprovalSnapshot } : {}) })
       if (!isCurrentApproval()) return
       setApproval(saved)
       setPreviousApprovalSnapshot(saved.snapshot)
@@ -613,6 +657,7 @@ export function App() {
   const receiveOpenResult = (result: OpenProjectResult) => {
     if (result.kind === 'opened') {
       preflightSequence.current += 1
+      setApprovalBusy(false)
       approvalContextSequence.current += 1
       approvalOperationSequence.current += 1
       exportOperationSequence.current += 1
@@ -728,6 +773,7 @@ export function App() {
       // A preflight started before this save must not later resurrect a CLEAR
       // audit after metadata has made the submission state stale.
       ++preflightSequence.current
+      setApprovalBusy(false)
       ++exportOperationSequence.current
       setExporting(false)
       setExportMessage(null)
@@ -793,6 +839,7 @@ export function App() {
         currentAssetChecksum: result.preparation.submission_checksum,
       }) : null)
       ++preflightSequence.current
+      setApprovalBusy(false)
       ++exportOperationSequence.current
       setExporting(false)
       setExportMessage(null)
@@ -1213,6 +1260,7 @@ export function App() {
                       approvalOperationSequence.current += 1
                       exportOperationSequence.current += 1
                       preflightSequence.current += 1
+                      setApprovalBusy(false)
                       setExporting(false)
                       setExportMessage(null)
                       setExternalManifestDecision(null)
@@ -1280,6 +1328,7 @@ export function App() {
                   approvalOperationSequence.current += 1
                   exportOperationSequence.current += 1
                   preflightSequence.current += 1
+                  setApprovalBusy(false)
                   setExporting(false)
                   setExportMessage(null)
                   setActiveProject(externalManifestDecision.external)

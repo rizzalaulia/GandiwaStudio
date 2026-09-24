@@ -18,6 +18,7 @@ import {
   browserProjectLifecycleDependencies,
   openProject,
   reopenProjectFromUserGesture,
+  requestProjectWritePermission,
   type DirectoryHandleLike,
 } from '../project-lifecycle'
 import { companionHeadersForToken } from './settings-client'
@@ -34,6 +35,25 @@ import {
   resolveSelectedInstance,
   type ProviderOption,
 } from '../assistant/router-selection'
+import {
+  loadMasterSelection,
+  resolveMasterSelection,
+  saveMasterSelection,
+  type MasterSelectionDirectory,
+} from '../master-selection-store'
+import {
+  loadStockMetadata,
+  saveStockMetadata,
+  type LoadedStockMetadata,
+  type MetadataDirectory,
+} from '../stock-metadata-store'
+import type { ReleaseStatus, StockMetadataDraft } from '../stock-metadata'
+import type { DurableAuditSnapshot } from '../approval-gate'
+import {
+  loadCurrentRevisionAudit,
+  runRevisionAudit,
+  type RevisionAuditDirectory,
+} from '../revision-audit-pipeline'
 
 // Issue #26 (opsi B, ronde 4) — Beranda meja studio + header controls:
 // theme toggle (malam/siang) dan tombol Setelan. Dialog Setelan memuat
@@ -223,7 +243,13 @@ function ProviderKeyRow({ provider, label, value, onChange, configured, unavaila
   )
 }
 
-type RevisionHistoryEntry = Readonly<{ assetId: string; revision: number; relativePath: string; contentType: string }>
+type RevisionHistoryEntry = Readonly<{
+  assetId: string
+  revision: number
+  relativePath: string
+  contentType: ContentType
+  creationMethod: CreationMethod
+}>
 
 type PreviewFile = Readonly<{ arrayBuffer(): Promise<ArrayBuffer>; type?: string }>
 type PreviewFileHandle = Readonly<{ getFile(): Promise<PreviewFile> }>
@@ -260,7 +286,13 @@ function revisionHistoryFromSnapshot(snapshot: string): { history: RevisionHisto
     const history: RevisionHistoryEntry[] = []
     for (const asset of manifest.assets) {
       for (const revision of asset.revisions) {
-        history.push({ assetId: asset.asset_id, revision: revision.revision, relativePath: revision.relative_path, contentType: asset.content_type })
+        history.push({
+          assetId: asset.asset_id,
+          revision: revision.revision,
+          relativePath: revision.relative_path,
+          contentType: asset.content_type,
+          creationMethod: asset.creation_method,
+        })
       }
     }
     history.sort((a, b) => b.revision - a.revision)
@@ -327,6 +359,12 @@ export function BerandaApp() {
 
   const [title, setTitle] = useState('')
   const [keywords, setKeywords] = useState('')
+  const [metadataCategory, setMetadataCategory] = useState('')
+  const [aiDisclosure, setAiDisclosure] = useState('')
+  const [releaseStatus, setReleaseStatus] = useState<ReleaseStatus>('not_required')
+  const [loadedMetadata, setLoadedMetadata] = useState<LoadedStockMetadata | null>(null)
+  const [metadataBusy, setMetadataBusy] = useState(false)
+  const [metadataMessage, setMetadataMessage] = useState<string | null>(null)
   // Diisi hasil job nyata: piksel dari artifact tervalidasi SHA-256 yang
   // sudah tersimpan sebagai revisi lokal. Selama kosong, panggung mengikuti
   // warna ruangan; latar netral terang dipakai saat art ada.
@@ -352,11 +390,12 @@ export function BerandaApp() {
   const [contentType, setContentType] = useState<ContentType>('illustration')
   // Riwayat revisi riil dari manifest proyek aktif — kandidat compare di #26
   // adalah perbandingan antar-revision hasil regenerate, bukan batch kandidat.
-  const [projectRevisions, setProjectRevisions] = useState<
-    ReadonlyArray<{ assetId: string; revision: number; relativePath: string; contentType: string }>
-  >([])
+  const [projectRevisions, setProjectRevisions] = useState<ReadonlyArray<RevisionHistoryEntry>>([])
   const [selectedRevisionKey, setSelectedRevisionKey] = useState<string | null>(null)
   const [masterRevisionKey, setMasterRevisionKey] = useState<string | null>(null)
+  const [masterSelectionSnapshot, setMasterSelectionSnapshot] = useState<string | undefined>(undefined)
+  const [masterSelectionBusy, setMasterSelectionBusy] = useState(false)
+  const [masterSelectionMessage, setMasterSelectionMessage] = useState<string | null>(null)
   const [canvasZoom, setCanvasZoom] = useState(100)
   const [inspectionBackground, setInspectionBackground] = useState<'light' | 'dark' | 'checker'>('light')
   const [rejectionReason, setRejectionReason] = useState('')
@@ -369,13 +408,24 @@ export function BerandaApp() {
   const [assistantModel, setAssistantModel] = useState(() => {
     try { return window.localStorage.getItem('beranda-router-model') ?? '' } catch { return '' }
   })
-  const [auditLifecycle, setAuditLifecycle] = useState<'EMPTY' | 'STALE'>('EMPTY')
+  const [auditLifecycle, setAuditLifecycle] = useState<'EMPTY' | 'STALE' | 'PASS' | 'WARNING' | 'FAIL'>('EMPTY')
+  const [auditSnapshot, setAuditSnapshot] = useState<string | undefined>(undefined)
+  const [durableAudit, setDurableAudit] = useState<DurableAuditSnapshot | null>(null)
+  const [auditMessage, setAuditMessage] = useState<string | null>(null)
+  const [auditBusy, setAuditBusy] = useState(false)
   const generationSequence = useRef(0)
   const brainstormSequence = useRef(0)
+  const masterSelectionSequence = useRef(0)
+  const metadataSequence = useRef(0)
+  const auditSequence = useRef(0)
 
   const resetProjectRuntime = useCallback(() => {
     generationSequence.current += 1
     brainstormSequence.current += 1
+    masterSelectionSequence.current += 1
+    metadataSequence.current += 1
+    auditSequence.current += 1
+    setBrainstormBusy(false)
     setHasImage(false)
     setCanvasImage(null)
     setPublishedManifest(null)
@@ -386,10 +436,25 @@ export function BerandaApp() {
     setProjectRevisions([])
     setSelectedRevisionKey(null)
     setMasterRevisionKey(null)
+    setMasterSelectionSnapshot(undefined)
+    setMasterSelectionBusy(false)
+    setMasterSelectionMessage(null)
     setRevisionPreviews({})
     setRejectionReason('')
     setBrainstorm(null)
+    setTitle('')
+    setKeywords('')
+    setMetadataCategory('')
+    setAiDisclosure('')
+    setReleaseStatus('not_required')
+    setLoadedMetadata(null)
+    setMetadataBusy(false)
+    setMetadataMessage(null)
     setAuditLifecycle('EMPTY')
+    setAuditSnapshot(undefined)
+    setDurableAudit(null)
+    setAuditMessage(null)
+    setAuditBusy(false)
   }, [])
 
   const acceptOpenedProject = useCallback((name: string, directory: DirectoryHandleLike, manifestSnapshot: string | null = null) => {
@@ -735,6 +800,133 @@ export function BerandaApp() {
     }
   }, [activeJobId, cancelRequested])
 
+  const handleSetMasterRevision = useCallback(async () => {
+    if (selectedRevisionKey === null || projectDirectory === null || projectManifestSnapshot === null) return
+    const entry = projectRevisions.find((candidate) => `${candidate.assetId}/${candidate.revision}` === selectedRevisionKey)
+    if (!entry) {
+      setMasterSelectionMessage('Revisi terpilih tidak lagi tersedia.')
+      return
+    }
+    const operation = ++masterSelectionSequence.current
+    const isCurrent = () => operation === masterSelectionSequence.current
+    setMasterSelectionBusy(true)
+    setMasterSelectionMessage(null)
+    try {
+      if (!(await requestProjectWritePermission(projectDirectory))) {
+        throw new Error('Izin tulis tidak diberikan. Master tidak disimpan.')
+      }
+      if (!isCurrent()) return
+      const directory = projectDirectory as unknown as MasterSelectionDirectory
+      const record = await resolveMasterSelection({
+        directory,
+        manifestSnapshot: projectManifestSnapshot,
+        assetId: entry.assetId,
+        revision: entry.revision,
+        selectedAt: new Date().toISOString(),
+        selectedBy: 'Master Peng',
+      })
+      if (!isCurrent()) return
+      const saved = await saveMasterSelection({
+        directory,
+        manifestSnapshot: projectManifestSnapshot,
+        record,
+        ...(masterSelectionSnapshot === undefined ? {} : { previousSnapshot: masterSelectionSnapshot }),
+      })
+      if (!isCurrent()) return
+      setMasterRevisionKey(selectedRevisionKey)
+      setMasterSelectionSnapshot(saved.snapshot)
+      setMasterSelectionMessage(`Master rev-${entry.revision} tersimpan di proyek lokal.`)
+    } catch (error) {
+      if (!isCurrent()) return
+      setMasterRevisionKey(null)
+      setMasterSelectionMessage(error instanceof Error ? error.message : 'Master tidak dapat disimpan.')
+    } finally {
+      if (isCurrent()) setMasterSelectionBusy(false)
+    }
+  }, [masterSelectionSnapshot, projectDirectory, projectManifestSnapshot, projectRevisions, selectedRevisionKey])
+
+  const handleSaveMetadata = useCallback(async () => {
+    if (projectDirectory === null || projectManifestSnapshot === null || selectedRevisionKey === null) return
+    const entry = projectRevisions.find((candidate) => `${candidate.assetId}/${candidate.revision}` === selectedRevisionKey)
+    if (!entry) return
+    const operation = ++metadataSequence.current
+    const isCurrent = () => operation === metadataSequence.current
+    setMetadataBusy(true)
+    setMetadataMessage(null)
+    try {
+      if (!(await requestProjectWritePermission(projectDirectory))) {
+        throw new Error('Izin tulis tidak diberikan. Metadata tidak disimpan.')
+      }
+      if (!isCurrent()) return
+      const metadata: StockMetadataDraft = {
+        schemaVersion: 1,
+        title,
+        keywords: keywords.split(',').map((keyword) => keyword.trim()).filter(Boolean),
+        category: metadataCategory,
+        contentType: entry.contentType,
+        creationMethod: entry.creationMethod,
+        generatedWithAi: entry.creationMethod === 'generative_ai' || entry.creationMethod === 'mixed',
+        aiDisclosure,
+        releaseStatus,
+      }
+      const saved = await saveStockMetadata({
+        directory: projectDirectory as unknown as MetadataDirectory,
+        manifestSnapshot: projectManifestSnapshot,
+        assetId: entry.assetId,
+        provenance: { contentType: entry.contentType, creationMethod: entry.creationMethod },
+        metadata,
+        sidecarSnapshot: loadedMetadata?.snapshot,
+      })
+      if (!isCurrent()) return
+      setLoadedMetadata(saved)
+      setTitle(saved.metadata.title)
+      setKeywords(saved.metadata.keywords.join(', '))
+      setAuditLifecycle('STALE')
+      auditSequence.current += 1
+      setAuditBusy(false)
+      setAuditMessage('Metadata berubah; durable audit sebelumnya STALE dan harus dijalankan ulang.')
+      setMetadataMessage('Metadata tersimpan. Audit revisi harus dijalankan ulang.')
+    } catch (error) {
+      if (isCurrent()) setMetadataMessage(error instanceof Error ? error.message : 'Metadata tidak dapat disimpan.')
+    } finally {
+      if (isCurrent()) setMetadataBusy(false)
+    }
+  }, [aiDisclosure, keywords, loadedMetadata?.snapshot, metadataCategory, projectDirectory, projectManifestSnapshot, projectRevisions, releaseStatus, selectedRevisionKey, title])
+
+  const handleRunAudit = useCallback(async () => {
+    if (projectDirectory === null || projectManifestSnapshot === null || selectedRevisionKey === null) return
+    const entry = projectRevisions.find((candidate) => `${candidate.assetId}/${candidate.revision}` === selectedRevisionKey)
+    if (!entry) return
+    const operation = ++auditSequence.current
+    const isCurrent = () => operation === auditSequence.current
+    setAuditBusy(true)
+    setAuditMessage(null)
+    try {
+      if (!(await requestProjectWritePermission(projectDirectory))) {
+        throw new Error('Izin tulis tidak diberikan. Audit tidak disimpan.')
+      }
+      if (!isCurrent()) return
+      const result = await runRevisionAudit({
+        directory: projectDirectory as unknown as RevisionAuditDirectory,
+        manifestSnapshot: projectManifestSnapshot,
+        assetId: entry.assetId,
+        revision: entry.revision,
+        ...(auditSnapshot === undefined ? {} : { previousAuditSnapshot: auditSnapshot }),
+      })
+      if (!isCurrent()) return
+      setAuditLifecycle(result.status)
+      setAuditSnapshot(result.snapshot)
+      setDurableAudit(result.audit)
+      setAuditMessage(`Audit ${result.status} tersimpan untuk rev-${entry.revision}.`)
+    } catch (error) {
+      if (!isCurrent()) return
+      setAuditLifecycle('STALE')
+      setAuditMessage(error instanceof Error ? error.message : 'Audit tidak dapat diselesaikan.')
+    } finally {
+      if (isCurrent()) setAuditBusy(false)
+    }
+  }, [auditSnapshot, projectDirectory, projectManifestSnapshot, projectRevisions, selectedRevisionKey])
+
   // Persistent gallery: hydrate thumbnails directly from browser-owned
   // revision files on reopen. Failed/missing files stay honest placeholders.
   useEffect(() => {
@@ -761,6 +953,95 @@ export function BerandaApp() {
       for (const url of urls) URL.revokeObjectURL(url)
     }
   }, [projectDirectory, projectRevisions])
+
+  useEffect(() => {
+    if (projectDirectory === null || projectManifestSnapshot === null) {
+      setMasterRevisionKey(null)
+      setMasterSelectionSnapshot(undefined)
+      return
+    }
+    const operation = ++masterSelectionSequence.current
+    loadMasterSelection(
+      projectDirectory as unknown as MasterSelectionDirectory,
+      projectManifestSnapshot,
+    ).then((loaded) => {
+      if (operation !== masterSelectionSequence.current) return
+      setMasterRevisionKey(loaded ? `${loaded.record.assetId}/${loaded.record.revision}` : null)
+      setMasterSelectionSnapshot(loaded?.snapshot)
+      setMasterSelectionMessage(null)
+    }).catch((error: unknown) => {
+      if (operation !== masterSelectionSequence.current) return
+      setMasterRevisionKey(null)
+      setMasterSelectionSnapshot(undefined)
+      setMasterSelectionMessage(error instanceof Error ? error.message : 'Master revision could not be loaded.')
+    })
+    return () => { masterSelectionSequence.current += 1; setMasterSelectionBusy(false) }
+  }, [projectDirectory, projectManifestSnapshot])
+
+  useEffect(() => {
+    if (projectDirectory === null || projectManifestSnapshot === null || selectedRevisionKey === null) {
+      setLoadedMetadata(null)
+      setAuditSnapshot(undefined)
+      setDurableAudit(null)
+      setAuditLifecycle(projectRevisions.length > 0 ? 'STALE' : 'EMPTY')
+      return
+    }
+    const entry = projectRevisions.find((candidate) => `${candidate.assetId}/${candidate.revision}` === selectedRevisionKey)
+    if (!entry) return
+    setLoadedMetadata(null)
+    setTitle('')
+    setKeywords('')
+    setMetadataCategory('')
+    setAiDisclosure('')
+    setReleaseStatus('not_required')
+    setMetadataMessage(null)
+    setAuditLifecycle('STALE')
+    setAuditSnapshot(undefined)
+    setDurableAudit(null)
+    setAuditMessage(null)
+    const metadataOperation = ++metadataSequence.current
+    const auditOperation = ++auditSequence.current
+    const directory = projectDirectory as unknown as RevisionAuditDirectory
+    loadStockMetadata(directory, entry.assetId, {
+      contentType: entry.contentType,
+      creationMethod: entry.creationMethod,
+    }).then((loaded) => {
+      if (metadataOperation !== metadataSequence.current) return
+      setLoadedMetadata(loaded ?? null)
+      if (loaded) {
+        setTitle(loaded.metadata.title)
+        setKeywords(loaded.metadata.keywords.join(', '))
+        setMetadataCategory(loaded.metadata.category)
+        setAiDisclosure(loaded.metadata.aiDisclosure)
+        setReleaseStatus(loaded.metadata.releaseStatus)
+        setMetadataMessage(null)
+      }
+      return loadCurrentRevisionAudit({
+        directory,
+        manifestSnapshot: projectManifestSnapshot,
+        assetId: entry.assetId,
+        revision: entry.revision,
+      })
+    }).then((loadedAudit) => {
+      if (auditOperation !== auditSequence.current || loadedAudit === undefined) return
+      setAuditLifecycle(loadedAudit.status)
+      setAuditSnapshot(loadedAudit.snapshot)
+      setDurableAudit(loadedAudit.audit)
+      setAuditMessage(`Audit ${loadedAudit.status} dimuat untuk rev-${entry.revision}.`)
+    }).catch((error: unknown) => {
+      if (auditOperation !== auditSequence.current) return
+      setAuditLifecycle('STALE')
+      setAuditSnapshot(undefined)
+      setDurableAudit(null)
+      setAuditMessage(error instanceof Error ? error.message : 'Audit revision could not be loaded.')
+    })
+    return () => {
+      metadataSequence.current += 1
+      auditSequence.current += 1
+      setMetadataBusy(false)
+      setAuditBusy(false)
+    }
+  }, [projectDirectory, projectManifestSnapshot, projectRevisions, selectedRevisionKey])
 
   // Blob URL lifecycle: revoke exactly when the displayed image is replaced
   // or the desk unmounts, so no dead blob and no leak.
@@ -1190,15 +1471,15 @@ export function BerandaApp() {
                 <button
                   type="button"
                   className="beranda-primary"
-                  disabled={selectedRevisionKey === null}
-                  onClick={() => setMasterRevisionKey(selectedRevisionKey)}
+                  disabled={selectedRevisionKey === null || masterSelectionBusy}
+                  onClick={() => void handleSetMasterRevision()}
                 >
-                  Jadikan revisi terpilih sebagai master
+                  {masterSelectionBusy ? 'Menyimpan master…' : 'Jadikan revisi terpilih sebagai master'}
                 </button>
                 <p role="status" aria-label="Master revisi">
-                  {masterRevisionKey === null
+                  {masterSelectionMessage ?? (masterRevisionKey === null
                     ? 'Master belum dipilih — pilih secara eksplisit.'
-                    : `Master: rev-${masterRevisionKey.split('/').at(-1)}`}
+                    : `Master: rev-${masterRevisionKey.split('/').at(-1)} · tersimpan`)}
                 </p>
               </div>
             )}
@@ -1234,11 +1515,79 @@ export function BerandaApp() {
           <p className="beranda-note" data-testid="keyword-count">
             {keywordCount} {t.keywordCount}
           </p>
+          {projectRevisions.length > 0 && (
+            <>
+              <label className="beranda-field">
+                <span>Kategori</span>
+                <input
+                  aria-label="Kategori metadata"
+                  value={metadataCategory}
+                  disabled={metadataBusy}
+                  onChange={(event) => setMetadataCategory(event.target.value)}
+                  placeholder="Contoh: Objects"
+                />
+              </label>
+              <label className="beranda-field">
+                <span>Disclosure AI</span>
+                <input
+                  aria-label="Disclosure AI"
+                  value={aiDisclosure}
+                  disabled={metadataBusy}
+                  onChange={(event) => setAiDisclosure(event.target.value)}
+                  placeholder="Created with generative AI."
+                />
+              </label>
+              <label className="beranda-field">
+                <span>Status release</span>
+                <select
+                  aria-label="Status release"
+                  value={releaseStatus}
+                  disabled={metadataBusy}
+                  onChange={(event) => setReleaseStatus(event.target.value as ReleaseStatus)}
+                >
+                  <option value="not_required">Tidak diperlukan</option>
+                  <option value="attached">Terlampir</option>
+                  <option value="needs_review">Perlu review</option>
+                </select>
+              </label>
+              <button
+                type="button"
+                className="beranda-ghost"
+                disabled={metadataBusy}
+                onClick={() => void handleSaveMetadata()}
+              >
+                {metadataBusy ? 'Menyimpan metadata…' : 'Simpan metadata revisi'}
+              </button>
+              {metadataMessage && <p role="status" className="beranda-note">{metadataMessage}</p>}
+            </>
+          )}
           <section className="beranda-audit-lifecycle" aria-label="Audit revisi aktif">
-            <strong>{auditLifecycle === 'STALE' ? 'STALE — export BLOCKED' : 'Belum ada revisi untuk diaudit'}</strong>
-            <p>{auditLifecycle === 'STALE'
-              ? 'Revisi aktif sudah masuk pipeline audit. Jalankan preflight terikat revisi sebelum approval atau export.'
-              : 'Hasil generate pertama akan membuat audit berstatus STALE/BLOCKED sampai preflight selesai.'}</p>
+            <strong>{auditLifecycle === 'EMPTY'
+              ? 'Belum ada revisi untuk diaudit'
+              : `${auditLifecycle} — export ${auditLifecycle === 'PASS' ? 'menunggu approval' : 'BLOCKED'}`}</strong>
+            <p>{auditMessage ?? (auditLifecycle === 'STALE'
+              ? 'Revisi aktif menunggu preflight terikat asset, revision, checksum metadata, dan ruleset.'
+              : auditLifecycle === 'EMPTY'
+                ? 'Hasil generate pertama akan masuk pipeline audit dalam keadaan STALE/BLOCKED.'
+                : `Durable audit ${auditLifecycle} terikat revisi aktif.`)}</p>
+            {durableAudit?.findings.map((finding) => (
+              <p key={finding.ruleId} className="beranda-note">
+                <strong>{finding.verdict}</strong> · {finding.ruleId} — {finding.message}
+              </p>
+            ))}
+            {projectRevisions.length > 0 && (
+              <button
+                type="button"
+                className="beranda-primary"
+                disabled={auditBusy || loadedMetadata === null}
+                onClick={() => void handleRunAudit()}
+              >
+                {auditBusy ? 'Menjalankan audit…' : 'Jalankan preflight revisi'}
+              </button>
+            )}
+            {projectRevisions.length > 0 && loadedMetadata === null && (
+              <p className="beranda-note">Simpan metadata valid terlebih dahulu sebelum audit.</p>
+            )}
           </section>
           <section
             role="region"
