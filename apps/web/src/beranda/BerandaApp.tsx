@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { ContentType, CreationMethod, ProjectManifest } from '@gandiwa/contracts'
 
@@ -25,7 +25,15 @@ import { buildApprovedCreativeJob } from './creative-session-adapter'
 import { dispatchApprovedCreativeJob, monitorCreativeJobToRevision } from './creative-dispatch-controller'
 import { fetchCreativeJob, downloadCreativeArtifact, cancelCreativeJob } from './creative-job-client'
 import { recordGeneratedRevision } from './generated-revision-store'
-import { saveCreativeSession, type CreativeSessionDirectory } from '../creative-session-store'
+import { loadCreativeSession, saveCreativeSession, type CreativeSessionDirectory } from '../creative-session-store'
+import { validateProjectManifest } from '@gandiwa/contracts'
+import {
+  fetchProviderOptions,
+  persistSelectedInstance,
+  clearSelectedInstance,
+  resolveSelectedInstance,
+  type ProviderOption,
+} from '../assistant/router-selection'
 
 // Issue #26 (opsi B, ronde 4) — Beranda meja studio + header controls:
 // theme toggle (malam/siang) dan tombol Setelan. Dialog Setelan memuat
@@ -215,6 +223,67 @@ function ProviderKeyRow({ provider, label, value, onChange, configured, unavaila
   )
 }
 
+type RevisionHistoryEntry = Readonly<{ assetId: string; revision: number; relativePath: string; contentType: string }>
+
+type PreviewFile = Readonly<{ arrayBuffer(): Promise<ArrayBuffer>; type?: string }>
+type PreviewFileHandle = Readonly<{ getFile(): Promise<PreviewFile> }>
+type PreviewDirectory = Readonly<{
+  getDirectoryHandle(name: string, options?: { create?: boolean }): Promise<PreviewDirectory>
+  getFileHandle(name: string, options?: { create?: boolean }): Promise<PreviewFileHandle>
+}>
+
+async function loadRevisionPreview(directory: PreviewDirectory, relativePath: string): Promise<string> {
+  const segments = relativePath.split('/')
+  const fileName = segments.pop()
+  if (!fileName || segments.some((segment) => !segment || segment === '.' || segment === '..')) {
+    throw new Error('Path revisi tidak aman.')
+  }
+  let current = directory
+  for (const segment of segments) current = await current.getDirectoryHandle(segment, { create: false })
+  const file = await (await current.getFileHandle(fileName, { create: false })).getFile()
+  const extension = fileName.split('.').at(-1)?.toLowerCase()
+  const mediaType = extension === 'jpeg' || extension === 'jpg' ? 'image/jpeg' : extension === 'svg' ? 'image/svg+xml' : 'image/png'
+  return URL.createObjectURL(new Blob([await file.arrayBuffer()], { type: file.type || mediaType }))
+}
+
+// Riwayat revisi dibaca dari manifest yang sudah tervalidasi kontrak. Manifest
+// invalid → kosong + error, tidak pernah menebak isi folder.
+function revisionHistoryFromSnapshot(snapshot: string): { history: RevisionHistoryEntry[]; error: string | null; latestAssetId: string | null } {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(snapshot)
+  } catch {
+    return { history: [], error: 'Manifest proyek bukan JSON valid — riwayat revisi tidak dibaca.', latestAssetId: null }
+  }
+  try {
+    const manifest = validateProjectManifest(parsed)
+    const history: RevisionHistoryEntry[] = []
+    for (const asset of manifest.assets) {
+      for (const revision of asset.revisions) {
+        history.push({ assetId: asset.asset_id, revision: revision.revision, relativePath: revision.relative_path, contentType: asset.content_type })
+      }
+    }
+    history.sort((a, b) => b.revision - a.revision)
+    const withAssets = manifest.assets.length > 0
+    // Kontinuitas: asset terakhir (pemilik rev tertinggi) jadi aktif berikutnya
+    // sehingga regenerate melanjutkan rev-N, bukan spawn asset baru.
+    const latest = [...manifest.assets].sort((a, b) =>
+      Math.max(...b.revisions.map((entry) => entry.revision)) - Math.max(...a.revisions.map((entry) => entry.revision)),
+    )[0]
+    return {
+      history,
+      error: null,
+      latestAssetId: withAssets && latest ? latest.asset_id : null,
+    }
+  } catch (cause) {
+    return {
+      history: [],
+      error: cause instanceof Error ? `Manifest invalid: ${cause.message}` : 'Manifest proyek invalid.',
+      latestAssetId: null,
+    }
+  }
+}
+
 export function BerandaApp() {
   const [theme, setTheme] = useState<'day' | 'night'>(() => {
     try {
@@ -262,7 +331,12 @@ export function BerandaApp() {
   // sudah tersimpan sebagai revisi lokal. Selama kosong, panggung mengikuti
   // warna ruangan; latar netral terang dipakai saat art ada.
   const [hasImage, setHasImage] = useState(false)
-  const [canvasImage, setCanvasImage] = useState<{ url: string; width: number; height: number } | null>(null)
+  const [canvasImage, setCanvasImage] = useState<{
+    url: string
+    width: number | null
+    height: number | null
+    revokeOnReplace: boolean
+  } | null>(null)
   const [publishedManifest, setPublishedManifest] = useState<ProjectManifest | null>(null)
   const [projectDirectory, setProjectDirectory] = useState<DirectoryHandleLike | null>(null)
   const [projectManifestSnapshot, setProjectManifestSnapshot] = useState<string | null>(null)
@@ -276,16 +350,75 @@ export function BerandaApp() {
   const [artifactExpiresAt, setArtifactExpiresAt] = useState<string | null>(null)
   const [activeAssetId, setActiveAssetId] = useState<string | null>(null)
   const [contentType, setContentType] = useState<ContentType>('illustration')
+  // Riwayat revisi riil dari manifest proyek aktif — kandidat compare di #26
+  // adalah perbandingan antar-revision hasil regenerate, bukan batch kandidat.
+  const [projectRevisions, setProjectRevisions] = useState<
+    ReadonlyArray<{ assetId: string; revision: number; relativePath: string; contentType: string }>
+  >([])
+  const [selectedRevisionKey, setSelectedRevisionKey] = useState<string | null>(null)
+  const [masterRevisionKey, setMasterRevisionKey] = useState<string | null>(null)
+  const [canvasZoom, setCanvasZoom] = useState(100)
+  const [inspectionBackground, setInspectionBackground] = useState<'light' | 'dark' | 'checker'>('light')
+  const [rejectionReason, setRejectionReason] = useState('')
+  const [revisionPreviews, setRevisionPreviews] = useState<Readonly<Record<string, string>>>({})
+  const [brainstorm, setBrainstorm] = useState<{ questions: string[]; recommendation: string } | null>(null)
+  const [brainstormBusy, setBrainstormBusy] = useState(false)
+  const [assistantInstances, setAssistantInstances] = useState<ProviderOption[] | null>(null)
+  const [assistantInstance, setAssistantInstance] = useState<string | null>(null)
+  // Ruling #58: instance/model assistant dipilih manusia, tanpa auto-route.
+  const [assistantModel, setAssistantModel] = useState(() => {
+    try { return window.localStorage.getItem('beranda-router-model') ?? '' } catch { return '' }
+  })
+  const [auditLifecycle, setAuditLifecycle] = useState<'EMPTY' | 'STALE'>('EMPTY')
+  const generationSequence = useRef(0)
+  const brainstormSequence = useRef(0)
+
+  const resetProjectRuntime = useCallback(() => {
+    generationSequence.current += 1
+    brainstormSequence.current += 1
+    setHasImage(false)
+    setCanvasImage(null)
+    setPublishedManifest(null)
+    setGenerationStatus({ state: 'idle', message: null })
+    setActiveJobId(null)
+    setCancelRequested(false)
+    setArtifactExpiresAt(null)
+    setProjectRevisions([])
+    setSelectedRevisionKey(null)
+    setMasterRevisionKey(null)
+    setRevisionPreviews({})
+    setRejectionReason('')
+    setBrainstorm(null)
+    setAuditLifecycle('EMPTY')
+  }, [])
 
   const acceptOpenedProject = useCallback((name: string, directory: DirectoryHandleLike, manifestSnapshot: string | null = null) => {
+    resetProjectRuntime()
     setProjectName(name)
     setRememberedProject(directory)
     setProjectDirectory(directory)
     setActiveProjectName(name)
-    setActiveAssetId(null)
-    if (manifestSnapshot !== null) setProjectManifestSnapshot(manifestSnapshot)
+    // Riwayat + kontinuitas asset dipulihkan dari manifest yang barusan
+    // divalidasi lifecycle, bukan dari tebakan sesi React sebelumnya.
+    if (manifestSnapshot !== null) {
+      const { history, latestAssetId } = revisionHistoryFromSnapshot(manifestSnapshot)
+      setProjectRevisions(history)
+      setProjectManifestSnapshot(manifestSnapshot)
+      setActiveAssetId(latestAssetId)
+      setSelectedRevisionKey(history[0] ? `${history[0].assetId}/${history[0].revision}` : null)
+      // Master adalah keputusan manusia sesi ini. Reopen tidak boleh menebak
+      // bahwa revisi terbaru otomatis menjadi master.
+      setMasterRevisionKey(null)
+      setAuditLifecycle(history.length > 0 ? 'STALE' : 'EMPTY')
+    } else {
+      setProjectRevisions([])
+      setActiveAssetId(null)
+      setSelectedRevisionKey(null)
+      setMasterRevisionKey(null)
+      setAuditLifecycle('EMPTY')
+    }
     setProjectMessage(`${name} dibuka secara lokal.`)
-  }, [])
+  }, [resetProjectRuntime])
 
   const handleOpenProject = useCallback(async () => {
     setProjectBusy(true)
@@ -324,6 +457,7 @@ export function BerandaApp() {
         browserProjectCreationDependencies(),
       )
       if (result.kind === 'created') {
+        resetProjectRuntime()
         setProjectName(result.projectName)
         setContentType(result.contentType)
         const remembered = await loadRememberedProjectDirectory<DirectoryHandleLike>()
@@ -341,7 +475,7 @@ export function BerandaApp() {
     } finally {
       setProjectBusy(false)
     }
-  }, [newProjectMethod, newProjectName, newProjectType])
+  }, [newProjectMethod, newProjectName, newProjectType, resetProjectRuntime])
 
   useEffect(() => {
     let cancelled = false
@@ -369,11 +503,68 @@ export function BerandaApp() {
     }
   }, [])
 
+  useEffect(() => {
+    let cancelled = false
+    fetchProviderOptions()
+      .then((options) => {
+        if (cancelled) return
+        setAssistantInstances(options)
+        setAssistantInstance(resolveSelectedInstance(options))
+      })
+      .catch(() => {
+        if (cancelled) return
+        setAssistantInstances([])
+        setAssistantInstance(null)
+      })
+    return () => { cancelled = true }
+  }, [])
+
   const toggleTheme = useCallback(() => {
     setTheme((current) => (current === 'day' ? 'night' : 'day'))
   }, [])
 
+  const handleBrainstorm = useCallback(async () => {
+    if (!activeProjectName || brainstormBusy) return
+    const operation = ++brainstormSequence.current
+    const isCurrentOperation = () => brainstormSequence.current === operation
+    if (assistantInstance === null) {
+      setGenerationStatus({ state: 'error', message: 'Pilih instance 9Router di Setelan dulu — tanpa pemilihan otomatis.' })
+      return
+    }
+    if (assistantModel.trim().length === 0) {
+      setGenerationStatus({ state: 'error', message: 'Pilih model reasoning 9Router di Setelan dulu — tanpa pemilihan otomatis.' })
+      return
+    }
+    setBrainstormBusy(true)
+    try {
+      const csrfResponse = await fetch('/api/v1/auth/csrf', { credentials: 'same-origin' })
+      if (!csrfResponse.ok) throw new Error('Gagal menyiapkan token keamanan assistant.')
+      const { csrf_token: csrfToken } = await csrfResponse.json() as { csrf_token: string }
+      const response = await fetch('/api/v1/creative/assistant/brainstorm', {
+        method: 'POST', credentials: 'same-origin', headers: companionHeadersForToken(csrfToken),
+        body: JSON.stringify({
+          instance_id: assistantInstance,
+          topic: activeProjectName,
+          content_type: contentType,
+          model_id: assistantModel.trim(),
+        }),
+      })
+      if (!response.ok) throw new Error(`Brainstorm assistant gagal (${response.status}).`)
+      const body = await response.json() as { questions: string[]; recommendation: string }
+      if (!Array.isArray(body.questions) || body.questions.length !== 3 || !body.recommendation) throw new Error('Respons brainstorm tidak valid.')
+      if (isCurrentOperation()) setBrainstorm(body)
+    } catch (error) {
+      if (isCurrentOperation()) {
+        setGenerationStatus({ state: 'error', message: error instanceof Error ? error.message : 'Brainstorm assistant gagal.' })
+      }
+    } finally {
+      if (isCurrentOperation()) setBrainstormBusy(false)
+    }
+  }, [activeProjectName, assistantInstance, assistantModel, brainstormBusy, contentType])
+
   const handleApprovePrompt = useCallback(async () => {
+    const operation = ++generationSequence.current
+    const isCurrentOperation = () => generationSequence.current === operation
     setGenerationStatus({ state: 'busy', message: null })
     try {
       if (!projectDirectory || activeProjectName === null) {
@@ -385,8 +576,16 @@ export function BerandaApp() {
         throw new Error('Snapshot manifest proyek belum tersedia.')
       }
       const generationTarget = resolutionForTier(tier, aspectRatio)
-      const sessionId = crypto.randomUUID()
-      const targetAssetId = activeAssetId ?? sessionId
+      // Kontinuitas asset: sesi kreatif memakai asset ID target — saat asset
+      // aktif dipulihkan dari manifest/pilihan strip, sidecar, persisted session,
+      // dan revisi manifest sama-sama menempel di asset itu, jadi regenerate
+      // berikutnya menjadi rev-N+1 alih-alih tile asset terpisah.
+      const targetAssetId = activeAssetId ?? crypto.randomUUID()
+      const sessionId = targetAssetId
+      const sessionDirectory = projectDirectory as DirectoryHandleLike & CreativeSessionDirectory
+      const previousSession = activeAssetId === null
+        ? undefined
+        : await loadCreativeSession(sessionDirectory, activeAssetId)
       const approved = await buildApprovedCreativeJob({
         sessionId,
         topic: activeProjectName,
@@ -400,16 +599,18 @@ export function BerandaApp() {
         contentType,
         human: 'Master Peng',
         approvedAt: new Date().toISOString(),
+        ...(previousSession === undefined ? {} : { previousSession }),
+        ...(rejectionReason.trim() ? { rejectionReason: rejectionReason.trim() } : {}),
       })
       // Runtime handle File System Access implement interface yang lebih luas
       // dari dua alias TS ini; set connected hanya lewat open/create nyata.
-      const sessionDirectory = projectDirectory as DirectoryHandleLike & CreativeSessionDirectory
       const { job, persisted } = await dispatchApprovedCreativeJob({
         approved,
         directory: sessionDirectory,
         manifestSnapshot,
-        sidecarSnapshot: undefined,
+        sidecarSnapshot: previousSession?.snapshot,
       })
+      if (!isCurrentOperation()) return
       setActiveJobId(job.id)
       setCancelRequested(false)
       setGenerationStatus({
@@ -424,10 +625,15 @@ export function BerandaApp() {
         delay: (ms) => new Promise((resolve) => { window.setTimeout(resolve, ms) }),
         maxAttempts: 300,
         onProgress: (currentJob) => {
+          if (!isCurrentOperation()) return
           const cancelNote = currentJob.cancel_requested ? ' · pembatalan diminta' : ''
+          // Issue #26 AC: posisi antrean tampil jelas saat job masih menunggu.
+          const queueNote = currentJob.status === 'queued' && currentJob.queue_position !== null
+            ? ` · posisi antrean ${currentJob.queue_position}`
+            : ''
           setGenerationStatus({
             state: 'busy',
-            message: `Job ${currentJob.id}: ${currentJob.status} · percobaan ${currentJob.attempt_count}${cancelNote}`,
+            message: `Job ${currentJob.id}: ${currentJob.status}${queueNote} · percobaan ${currentJob.attempt_count}${cancelNote}`,
           })
         },
         fetchArtifact: downloadCreativeArtifact,
@@ -437,10 +643,12 @@ export function BerandaApp() {
           manifestSnapshot,
           persistedSession: persisted,
           assetId: targetAssetId,
+          ...(rejectionReason.trim() ? { rejectionReason: rejectionReason.trim() } : {}),
           saveSidecar: saveCreativeSession,
           publishManifest: (next) => writeProjectManifestAtomically(projectDirectory as unknown as Parameters<typeof writeProjectManifestAtomically>[0], next),
         },
         recordOutcome: (outcome) => {
+          if (!isCurrentOperation()) return Promise.resolve()
           if (outcome.status === 'succeeded') {
             setGenerationStatus({ state: 'idle', message: outcome.message })
             setActiveJobId(null)
@@ -471,25 +679,43 @@ export function BerandaApp() {
         // unmount — not here, or the <img> would point at a dead handle.
         now: () => Date.now(),
       })
+      if (!isCurrentOperation()) return
       if (finished.status === 'succeeded' && finished.url !== null && finished.job?.artifact) {
-        setCanvasImage({ url: finished.url, width: finished.job.artifact.width, height: finished.job.artifact.height })
+        setCanvasImage({
+          url: finished.url,
+          width: finished.job.artifact.width,
+          height: finished.job.artifact.height,
+          revokeOnReplace: true,
+        })
         setHasImage(true)
         setPublishedManifest(finished.publishedManifest)
         if (finished.publishedManifest !== null) {
-          setProjectManifestSnapshot(`${JSON.stringify(finished.publishedManifest, null, 2)}\n`)
+          const nextSnapshot = `${JSON.stringify(finished.publishedManifest, null, 2)}\n`
+          setProjectManifestSnapshot(nextSnapshot)
+          // Baca ulang manifest yang baru terbit: rev-N+1 masuk strip kandidat
+          // dan asset aktif tetap asset yang sama (kontinuitas regenerate).
+          const { history, latestAssetId } = revisionHistoryFromSnapshot(nextSnapshot)
+          setProjectRevisions(history)
+          setActiveAssetId(latestAssetId ?? targetAssetId)
+          setSelectedRevisionKey(history[0] ? `${history[0].assetId}/${history[0].revision}` : null)
         }
-        setActiveAssetId(targetAssetId)
         setArtifactExpiresAt(finished.job.artifact_expires_at)
+        setRejectionReason('')
+        // Revisi baru selalu menginvalidasi audit/approval lama. Jangan pernah
+        // menampilkan PASS/CLEAR hingga preflight terikat revisi ini dijalankan.
+        setAuditLifecycle('STALE')
       } else {
         setGenerationStatus({ state: 'error', message: finished.error ?? finished.message ?? `Job berakhir ${finished.status}.` })
       }
     } catch (error) {
-      setGenerationStatus({
-        state: 'error',
-        message: error instanceof Error ? error.message : 'Pengiriman job gagal.',
-      })
+      if (isCurrentOperation()) {
+        setGenerationStatus({
+          state: 'error',
+          message: error instanceof Error ? error.message : 'Pengiriman job gagal.',
+        })
+      }
     }
-  }, [activeAssetId, activeProjectName, aspectRatio, contentType, model, negativePrompt, projectDirectory, projectManifestSnapshot, prompt, tier])
+  }, [activeAssetId, activeProjectName, aspectRatio, contentType, model, negativePrompt, projectDirectory, projectManifestSnapshot, prompt, rejectionReason, tier])
 
   const handleCancelJob = useCallback(async () => {
     if (activeJobId === null || cancelRequested) return
@@ -509,10 +735,37 @@ export function BerandaApp() {
     }
   }, [activeJobId, cancelRequested])
 
+  // Persistent gallery: hydrate thumbnails directly from browser-owned
+  // revision files on reopen. Failed/missing files stay honest placeholders.
+  useEffect(() => {
+    if (projectDirectory === null || projectRevisions.length === 0) {
+      setRevisionPreviews({})
+      return
+    }
+    let cancelled = false
+    const urls: string[] = []
+    Promise.all(projectRevisions.map(async (entry) => {
+      const key = `${entry.assetId}/${entry.revision}`
+      try {
+        const url = await loadRevisionPreview(projectDirectory as unknown as PreviewDirectory, entry.relativePath)
+        urls.push(url)
+        return [key, url] as const
+      } catch {
+        return [key, ''] as const
+      }
+    })).then((pairs) => {
+      if (!cancelled) setRevisionPreviews(Object.fromEntries(pairs))
+    }).catch(() => undefined)
+    return () => {
+      cancelled = true
+      for (const url of urls) URL.revokeObjectURL(url)
+    }
+  }, [projectDirectory, projectRevisions])
+
   // Blob URL lifecycle: revoke exactly when the displayed image is replaced
   // or the desk unmounts, so no dead blob and no leak.
   useEffect(() => {
-    if (canvasImage === null) return
+    if (canvasImage === null || !canvasImage.revokeOnReplace) return
     const liveUrl = canvasImage.url
     return () => { URL.revokeObjectURL(liveUrl) }
   }, [canvasImage])
@@ -693,6 +946,16 @@ export function BerandaApp() {
           className="beranda-side beranda-side-left"
         >
           <h2>{t.promptPanel}</h2>
+          <button type="button" className="beranda-ghost" disabled={activeProjectName === null || brainstormBusy} onClick={() => void handleBrainstorm()}>
+            {brainstormBusy ? '9Router berpikir…' : 'Brainstorm dengan 9Router'}
+          </button>
+          {brainstorm !== null && (
+            <div className="beranda-brainstorm" role="status" aria-label="Hasil brainstorm 9Router">
+              <ol>{brainstorm.questions.map((question) => <li key={question}>{question}</li>)}</ol>
+              <p><strong>Rekomendasi:</strong> {brainstorm.recommendation}</p>
+              <button type="button" onClick={() => setPrompt(brainstorm.recommendation)}>Pakai rekomendasi sebagai prompt</button>
+            </div>
+          )}
           <label className="beranda-field">
             <span>{t.promptMain}</span>
             <textarea
@@ -713,6 +976,18 @@ export function BerandaApp() {
               placeholder={t.negativePlaceholder}
             />
           </label>
+          {projectRevisions.length > 0 && (
+            <label className="beranda-field">
+              <span>Alasan penolakan hasil sebelumnya (opsional jika prompt berubah)</span>
+              <textarea
+                aria-label="Alasan penolakan hasil sebelumnya"
+                rows={2}
+                value={rejectionReason}
+                onChange={(event) => setRejectionReason(event.target.value)}
+                placeholder="Contoh: komposisi terlalu padat di sisi kanan."
+              />
+            </label>
+          )}
           <label className="beranda-field">
             <span>{t.model}</span>
             <select aria-label={t.model} value={model} onChange={(event) => setModel(event.target.value)}>
@@ -781,19 +1056,52 @@ export function BerandaApp() {
           data-testid="canvas-hero"
           className="beranda-canvas"
         >
+          <div className="beranda-inspection-controls" aria-label="Kontrol inspeksi kandidat">
+            <label>
+              <span>Zoom</span>
+              <input
+                type="range"
+                min="50"
+                max="200"
+                step="25"
+                value={canvasZoom}
+                aria-label="Zoom kanvas"
+                onChange={(event) => setCanvasZoom(Number(event.target.value))}
+              />
+              <span aria-live="off">{canvasZoom}%</span>
+            </label>
+            <div role="group" aria-label="Latar inspeksi">
+              {(['light', 'dark', 'checker'] as const).map((background) => (
+                <button
+                  type="button"
+                  key={background}
+                  aria-label={background === 'light' ? 'Latar terang' : background === 'dark' ? 'Latar gelap' : 'Latar kotak-kotak'}
+                  aria-pressed={inspectionBackground === background}
+                  onClick={() => setInspectionBackground(background)}
+                >
+                  {background === 'light' ? 'Terang' : background === 'dark' ? 'Gelap' : 'Kotak'}
+                </button>
+              ))}
+            </div>
+          </div>
           <div
             className={`beranda-stage ${hasImage ? 'beranda-stage-loaded' : ''}`}
             data-testid="canvas-stage"
             data-has-image={hasImage ? 'true' : 'false'}
+            data-zoom={canvasZoom}
+            data-inspection-background={inspectionBackground}
           >
             {hasImage && canvasImage ? (
               <>
                 <img
                   src={canvasImage.url}
-                  alt={`Hasil generate ${canvasImage.width} × ${canvasImage.height} px`}
-                  width={canvasImage.width}
-                  height={canvasImage.height}
+                  alt={canvasImage.width !== null && canvasImage.height !== null
+                    ? `Hasil generate ${canvasImage.width} × ${canvasImage.height} px`
+                    : 'Revisi terpilih dari proyek lokal'}
+                  {...(canvasImage.width === null ? {} : { width: canvasImage.width })}
+                  {...(canvasImage.height === null ? {} : { height: canvasImage.height })}
                   className="beranda-stage-art"
+                  style={{ transform: `scale(${canvasZoom / 100})` }}
                 />
                 <a
                   className="beranda-primary beranda-download"
@@ -804,7 +1112,9 @@ export function BerandaApp() {
                     event.stopPropagation()
                   }}
                 >
-                  Unduh hasil ({canvasImage.width} × {canvasImage.height} px)
+                  {canvasImage.width !== null && canvasImage.height !== null
+                    ? `Unduh hasil (${canvasImage.width} × ${canvasImage.height} px)`
+                    : 'Unduh revisi terpilih'}
                 </a>
                 {artifactExpiresAt !== null && (
                   <p data-testid="artifact-expiry" className="beranda-note">
@@ -824,7 +1134,74 @@ export function BerandaApp() {
             aria-label={t.backend === 'Backend' ? 'Kandidat job terakhir' : 'Latest job candidates'}
             className="beranda-kandidat"
           >
-            <p>{t.kandidatEmpty}</p>
+            {projectRevisions.length === 0 ? (
+              <p>{t.kandidatEmpty}</p>
+            ) : (
+              <div className="beranda-kandidat-strip" role="listbox" aria-label={t.backend === 'Backend' ? 'Riwayat revisi proyek' : 'Project revision history'}>
+                {projectRevisions.map((entry) => {
+                  const key = `${entry.assetId}/${entry.revision}`
+                  const selected = key === selectedRevisionKey
+                  return (
+                    <button
+                      type="button"
+                      key={key}
+                      role="option"
+                      aria-selected={selected}
+                      data-testid={`kandidat-${entry.assetId}-rev-${entry.revision}`}
+                      data-revision={`rev-${entry.revision}`}
+                      aria-label={`Asset ${entry.assetId}, rev-${entry.revision}`}
+                      data-master={masterRevisionKey === key ? 'true' : 'false'}
+                      onClick={() => {
+                        setSelectedRevisionKey(key)
+                        // Kontinuitas berasal dari pilihan eksplisit pengguna:
+                        // asset dari revisi yang dipilih menjadi target
+                        // regeneration berikutnya, bukan tebakan sesi lama.
+                        setActiveAssetId(entry.assetId)
+                        const preview = revisionPreviews[key]
+                        if (preview) {
+                          setCanvasImage({
+                            url: preview,
+                            width: null,
+                            height: null,
+                            revokeOnReplace: false,
+                          })
+                          setHasImage(true)
+                          setArtifactExpiresAt(null)
+                        }
+                        // Bukti audit harus terikat pada revisi yang dipilih.
+                        // Sampai evidence revisi itu dimuat/diulang, gate tetap fail-closed.
+                        setAuditLifecycle('STALE')
+                      }}
+                      title={entry.relativePath}
+                    >
+                      {revisionPreviews[key] ? (
+                        <img src={revisionPreviews[key]} alt="" className="beranda-kandidat-thumb" />
+                      ) : (
+                        <span className="beranda-kandidat-placeholder" aria-hidden="true">Tanpa preview</span>
+                      )}
+                      <strong>rev-{entry.revision}</strong>
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+            {projectRevisions.length > 0 && (
+              <div className="beranda-master-selection">
+                <button
+                  type="button"
+                  className="beranda-primary"
+                  disabled={selectedRevisionKey === null}
+                  onClick={() => setMasterRevisionKey(selectedRevisionKey)}
+                >
+                  Jadikan revisi terpilih sebagai master
+                </button>
+                <p role="status" aria-label="Master revisi">
+                  {masterRevisionKey === null
+                    ? 'Master belum dipilih — pilih secara eksplisit.'
+                    : `Master: rev-${masterRevisionKey.split('/').at(-1)}`}
+                </p>
+              </div>
+            )}
           </div>
         </section>
 
@@ -857,6 +1234,12 @@ export function BerandaApp() {
           <p className="beranda-note" data-testid="keyword-count">
             {keywordCount} {t.keywordCount}
           </p>
+          <section className="beranda-audit-lifecycle" aria-label="Audit revisi aktif">
+            <strong>{auditLifecycle === 'STALE' ? 'STALE — export BLOCKED' : 'Belum ada revisi untuk diaudit'}</strong>
+            <p>{auditLifecycle === 'STALE'
+              ? 'Revisi aktif sudah masuk pipeline audit. Jalankan preflight terikat revisi sebelum approval atau export.'
+              : 'Hasil generate pertama akan membuat audit berstatus STALE/BLOCKED sampai preflight selesai.'}</p>
+          </section>
           <section
             role="region"
             aria-label={t.backend === 'Backend' ? 'Status sistem' : 'System status'}
@@ -1006,12 +1389,40 @@ export function BerandaApp() {
                     <option value="9router">9Router · credential saja</option>
                   </select>
                 </label>
-                <label className="beranda-field"><span>Model</span>
-                  <select aria-label="Model reasoning" value="assistant-pending" disabled>
-                    <option value="assistant-pending">Assistant workflow belum tersedia</option>
+                <label className="beranda-field"><span>Instance</span>
+                  <select
+                    aria-label="Instance reasoning 9Router"
+                    value={assistantInstance ?? ''}
+                    disabled={assistantInstances === null || assistantInstances.length === 0}
+                    onChange={(event) => {
+                      const chosen = event.target.value
+                      if (!chosen) {
+                        clearSelectedInstance()
+                        setAssistantInstance(null)
+                      } else {
+                        persistSelectedInstance(chosen)
+                        setAssistantInstance(chosen)
+                      }
+                    }}
+                  >
+                    <option value="">Pilih instance…</option>
+                    {(assistantInstances ?? []).map((instance) => (
+                      <option key={instance.id} value={instance.id}>{instance.name}</option>
+                    ))}
                   </select>
                 </label>
-                <p className="beranda-note">Kunci dapat disimpan dan diuji, tetapi brainstorm/metadata assistant belum tersambung ke Beranda.</p>
+                <label className="beranda-field"><span>Model</span>
+                  <input
+                    aria-label="Model reasoning 9Router"
+                    placeholder="cth. qwen/qwen3-32b — wajib dipilih eksplisit, tanpa auto"
+                    value={assistantModel}
+                    onChange={(event) => {
+                      setAssistantModel(event.target.value)
+                      try { window.localStorage.setItem('beranda-router-model', event.target.value) } catch { /* sesi saja */ }
+                    }}
+                  />
+                </label>
+                <p className="beranda-note">Kunci dapat disimpan dan diuji; brainstorm memakai model reasoning ini secara eksplisit.</p>
                 <ProviderKeyRow provider="9router" label="9Router" value={newRouterKey} onChange={setNewRouterKey} configured={providerRows.find((entry) => entry.provider === '9router')?.configured === true} saveProviderKey={saveProviderKey} validateProviderKey={validateProviderKey} testing={testingProvider === '9router'} keyTest={keyTest} t={t} />
               </section>
               {settingsNote && <p role="status" className="beranda-note">{settingsNote}</p>}

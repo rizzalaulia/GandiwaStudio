@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import tempfile
 import uuid
@@ -17,9 +18,11 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
+from pydantic import BaseModel, ConfigDict, Field
 
 from gandiwa_api.artifact_store import AccessDenied, ArtifactStore, ExpiredArtifact
 from gandiwa_api.config import Settings
+from gandiwa_api.creative import assistant_adapter
 from gandiwa_api.creative.http_api import (
     CreativeJobRequest,
     enqueue_browser_job,
@@ -29,6 +32,7 @@ from gandiwa_api.creative.http_api import (
     require_owned_session,
 )
 from gandiwa_api.database import create_sqlite_engine
+from gandiwa_api.queue import QueueStore
 from gandiwa_api.raster_preflight import DEFAULT_LIMITS as RASTER_PREFLIGHT_LIMITS
 from gandiwa_api.raster_preflight import inspect_raster
 from gandiwa_api.security.artifacts import build_artifact_download_response
@@ -42,6 +46,7 @@ from gandiwa_api.security.csrf import (
 )
 from gandiwa_api.security.provider_key_store import ProviderKeyStore
 from gandiwa_api.security.providers import ProviderInfo, get_configured_providers
+from gandiwa_api.security.ssrf import validate_9router_base_url
 from gandiwa_api.svg_preflight import DEFAULT_LIMITS as SVG_PREFLIGHT_LIMITS
 from gandiwa_api.svg_preflight import inspect_svg
 from gandiwa_api.svg_quarantine import SvgQuarantine
@@ -433,6 +438,86 @@ def validate_provider_key(provider: str) -> JSONResponse:
     return JSONResponse(content=body)
 
 
+class BrainstormRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    instance_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+    topic: str = Field(min_length=1, max_length=500)
+    content_type: Literal["photo", "illustration", "vector"]
+    model_id: str = Field(min_length=1, max_length=200)
+
+
+class _BrainstormTransport:
+    def __init__(self, body: dict[str, object]) -> None:
+        self.body = body
+
+    def request(self, operation: str, payload: dict[str, object]) -> dict[str, object]:
+        return self.body
+
+
+@app.post("/api/v1/creative/assistant/brainstorm")
+def brainstorm_creative_brief(payload: BrainstormRequest, request: Request) -> JSONResponse:
+    """One bounded, schema-validated 9Router brainstorm operation."""
+    current_settings = Settings()
+    require_owned_session(request, current_settings)
+    origins = current_settings.ninerouter_instance_origins()
+    origin = origins.get(payload.instance_id)
+    if origin is None:
+        raise HTTPException(status_code=404, detail="selected 9Router instance is unavailable")
+    instance_id = payload.instance_id
+    try:
+        validate_9router_base_url(origin)
+    except ValueError:
+        raise HTTPException(status_code=503, detail="9Router assistant origin is invalid") from None
+    key = ProviderKeyStore(current_settings).get(
+        "9router"
+    ) or current_settings.ninerouter_instance_api_key(instance_id)
+    if not key:
+        raise HTTPException(status_code=503, detail="9Router assistant credential is unavailable")
+    try:
+        response = httpx.post(
+            f"{origin.rstrip('/')}/chat/completions",
+            headers={"Authorization": f"Bearer {key}"},
+            json={
+                "model": payload.model_id,
+                "stream": False,
+                "response_format": {"type": "json_object"},
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "brainstorm: return JSON with exactly three distinct "
+                            "questions and one recommendation."
+                        ),
+                    },
+                    {"role": "user", "content": payload.model_dump_json()},
+                ],
+            },
+            timeout=30.0,
+            follow_redirects=False,
+        )
+        response.raise_for_status()
+        upstream = response.json()
+        response_model = upstream.get("model")
+        content = upstream["choices"][0]["message"]["content"]
+        body = json.loads(content)
+        if not isinstance(body, dict) or not isinstance(response_model, str):
+            raise ValueError("invalid assistant body")
+        body["model"] = response_model
+        result = assistant_adapter.brainstorm(_BrainstormTransport(body), payload.model_dump())
+    except (
+        httpx.HTTPError,
+        KeyError,
+        IndexError,
+        TypeError,
+        ValueError,
+        assistant_adapter.AssistantError,
+    ):
+        raise HTTPException(
+            status_code=502, detail="9Router assistant response was unavailable or invalid"
+        ) from None
+    return JSONResponse(content=asdict(result))
+
+
 @app.get("/api/v1/creative/bootstrap")
 def bootstrap_creative_session(request: Request) -> JSONResponse:
     """Issue an opaque browser ownership cookie without persisting project data server-side."""
@@ -467,7 +552,15 @@ def read_creative_job(job_id: str, request: Request) -> JSONResponse:
     current_settings = Settings()
     owner = require_owned_session(request, current_settings)
     job = get_owned_job(job_id, owner_session_id=owner, settings=current_settings)
-    return JSONResponse(content=public_job_view(job, current_settings.ARTIFACT_RETENTION_HOURS))
+    # Issue #26 AC: queue position disclosed while the job waits in the queue.
+    position = QueueStore(create_sqlite_engine(current_settings)).queued_position(job_id)
+    return JSONResponse(
+        content=public_job_view(
+            job,
+            current_settings.ARTIFACT_RETENTION_HOURS,
+            queue_position=position,
+        )
+    )
 
 
 @app.delete("/api/v1/creative/jobs/{job_id}")

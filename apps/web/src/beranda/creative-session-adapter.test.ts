@@ -53,4 +53,26 @@ describe('approved creative session adapter', () => {
   it('rejects a sidecar request before it can claim approval when the prompt is incomplete', async () => {
     await expect(buildApprovedCreativeJob({ ...input, negativePrompt: '   ' })).rejects.toThrow('Negative prompt wajib diisi')
   })
+
+  it('rejects identical regenerate unless a human records a rejection reason', async () => {
+    const first = await buildApprovedCreativeJob(input)
+    const previousSession = {
+      session: {
+        ...first.sidecar,
+        revisions: [{
+          revisionId: 'rev-1', promptDigest: first.promptDigest, providerId: 'fal',
+          modelId: input.modelId, providerJobId: 'job-1', adapterVersion: 'gandiwa-web-1',
+          parameters: { artifact_id: 'artifact-1' }, createdAt: input.approvedAt,
+        }],
+      },
+      snapshot: '{}\n',
+      checksum: 'a'.repeat(64),
+    }
+
+    await expect(buildApprovedCreativeJob({ ...input, previousSession })).rejects.toThrow(/Regenerate identik ditolak/)
+    const allowed = await buildApprovedCreativeJob({ ...input, previousSession, rejectionReason: 'Komposisi terlalu padat.' })
+    expect(allowed.sidecar.revisions).toHaveLength(1)
+    expect(allowed.sidecar.approvals).toHaveLength(2)
+    expect(allowed.payload.idempotency_key).not.toBe(first.payload.idempotency_key)
+  })
 })

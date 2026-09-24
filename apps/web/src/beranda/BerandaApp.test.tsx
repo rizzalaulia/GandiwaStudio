@@ -39,6 +39,7 @@ const MANIFEST_TEXT = JSON.stringify({
   assets: [],
 })
 
+const APPROVED_FIXTURE_TYPE: { sidecar: { schemaVersion: 1 } } = { sidecar: { schemaVersion: 1 } }
 const APPROVED_FIXTURE = {
   sidecar: {
     schemaVersion: 1 as const,
@@ -69,16 +70,17 @@ const APPROVED_FIXTURE = {
 let sidecarText = ''
 let createdSidecar = false
 
-function fakeProjectDirectory(): unknown {
+function fakeProjectDirectory(overrides: { manifestText?: string } = {}): unknown {
+  const manifestText = overrides.manifestText ?? MANIFEST_TEXT
   return {
     getFileHandle: (name: string, options?: { create?: boolean }) => {
       if (name === 'gandiwa-project.json' && options?.create !== true) {
-        return Promise.resolve({ getFile: () => Promise.resolve({ text: () => Promise.resolve(MANIFEST_TEXT) }) })
+        return Promise.resolve({ getFile: () => Promise.resolve({ text: () => Promise.resolve(manifestText) }) })
       }
       if (options?.create === true) {
         // Writes (tmp manifest + final manifest overwrite + revision files).
         return Promise.resolve({
-          getFile: () => Promise.resolve({ text: () => Promise.resolve(MANIFEST_TEXT) }),
+          getFile: () => Promise.resolve({ text: () => Promise.resolve(manifestText) }),
           createWritable: () => Promise.resolve({
             write: () => Promise.resolve(),
             close: () => Promise.resolve(),
@@ -258,6 +260,132 @@ describe('Beranda — meja kerja studio', () => {
     expect(strip).toBeVisible()
     expect(strip).toHaveTextContent(/1 generate = 1 gambar/i)
     expect(strip).not.toHaveTextContent('4 kandidat')
+  })
+
+  it('lists real project revisions in the kandidat strip after reopening a project with assets', async () => {
+    const manifestWithAsset = JSON.stringify({
+      schema_version: 1,
+      project_id: '1e5c8a02-7b34-4c19-9e2a-6d0f3b8c5a71',
+      project_name: 'Demo Stok',
+      assets: [{
+        asset_id: '1e5c8a02-7b34-4c19-9e2a-6d0f3b8c5a71',
+        content_type: 'illustration',
+        creation_method: 'generative_ai',
+        revisions: [
+          { revision: 2, generation_format: 'png', working_format: 'png', master_format: 'png', submission_format: 'jpeg', relative_path: 'revisions/1e5c8a02-7b34-4c19-9e2a-6d0f3b8c5a71/rev-2.png' },
+          { revision: 1, generation_format: 'png', working_format: 'png', master_format: 'png', submission_format: 'jpeg', relative_path: 'revisions/1e5c8a02-7b34-4c19-9e2a-6d0f3b8c5a71/rev-1.png' },
+        ],
+      }],
+    })
+    rememberedDirectory = fakeProjectDirectory({ manifestText: manifestWithAsset })
+    Object.defineProperty(window, 'showDirectoryPicker', {
+      configurable: true,
+      value: vi.fn(() => Promise.resolve(rememberedDirectory)),
+    })
+    render(<BerandaApp />)
+    fireEvent.click(screen.getByRole('button', { name: 'Buka proyek' }))
+    await waitFor(() => expect(screen.getByRole('toolbar')).toHaveTextContent('dibuka secara lokal'))
+
+    const strip = screen.getByRole('region', { name: 'Kandidat job terakhir' })
+    expect(strip).toHaveTextContent('rev-2')
+    expect(strip).toHaveTextContent('rev-1')
+    expect(strip).not.toHaveTextContent(/1 generate = 1 gambar.*riwayat kosong/i)
+  })
+
+  it('offers zoom, inspection backgrounds, and explicit master selection for revision compare', async () => {
+    const manifestWithAsset = JSON.stringify({
+      schema_version: 1,
+      project_id: '1e5c8a02-7b34-4c19-9e2a-6d0f3b8c5a71',
+      project_name: 'Demo Stok',
+      assets: [{
+        asset_id: '1e5c8a02-7b34-4c19-9e2a-6d0f3b8c5a71',
+        content_type: 'illustration',
+        creation_method: 'generative_ai',
+        revisions: [
+          { revision: 2, generation_format: 'png', working_format: 'png', master_format: 'png', submission_format: 'jpeg', relative_path: 'revisions/1e5c8a02-7b34-4c19-9e2a-6d0f3b8c5a71/rev-2.png' },
+          { revision: 1, generation_format: 'png', working_format: 'png', master_format: 'png', submission_format: 'jpeg', relative_path: 'revisions/1e5c8a02-7b34-4c19-9e2a-6d0f3b8c5a71/rev-1.png' },
+        ],
+      }],
+    })
+    rememberedDirectory = fakeProjectDirectory({ manifestText: manifestWithAsset })
+    Object.defineProperty(window, 'showDirectoryPicker', {
+      configurable: true,
+      value: vi.fn(() => Promise.resolve(rememberedDirectory)),
+    })
+    render(<BerandaApp />)
+    fireEvent.click(screen.getByRole('button', { name: 'Buka proyek' }))
+    await waitFor(() => expect(screen.getByRole('toolbar')).toHaveTextContent('dibuka secara lokal'))
+
+    expect(screen.getByRole('slider', { name: 'Zoom kanvas' })).toHaveValue('100')
+    fireEvent.change(screen.getByRole('slider', { name: 'Zoom kanvas' }), { target: { value: '150' } })
+    expect(screen.getByTestId('canvas-stage')).toHaveAttribute('data-zoom', '150')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Latar gelap' }))
+    expect(screen.getByTestId('canvas-stage')).toHaveAttribute('data-inspection-background', 'dark')
+
+    const rev1 = screen.getByRole('option', { name: /rev-1/ })
+    const rev2 = screen.getByRole('option', { name: /rev-2/ })
+    fireEvent.click(rev1)
+    fireEvent.click(screen.getByRole('button', { name: 'Jadikan revisi terpilih sebagai master' }))
+    expect(screen.getByRole('status', { name: 'Master revisi' })).toHaveTextContent('rev-1')
+    expect(rev1).toHaveAttribute('data-master', 'true')
+    expect(rev2).toHaveAttribute('data-master', 'false')
+  })
+
+  it('improves generate continuity by preselecting the latest asset revision after reopen', async () => {
+    const manifestWithAsset = JSON.stringify({
+      schema_version: 1,
+      project_id: '1e5c8a02-7b34-4c19-9e2a-6d0f3b8c5a71',
+      project_name: 'Demo Stok',
+      assets: [{
+        asset_id: '1e5c8a02-7b34-4c19-9e2a-6d0f3b8c5a71',
+        content_type: 'illustration',
+        creation_method: 'generative_ai',
+        revisions: [{ revision: 1, generation_format: 'png', working_format: 'png', master_format: 'png', submission_format: 'jpeg', relative_path: 'revisions/1e5c8a02-7b34-4c19-9e2a-6d0f3b8c5a71/rev-1.png' }],
+      }],
+    })
+    rememberedDirectory = fakeProjectDirectory({ manifestText: manifestWithAsset })
+    Object.defineProperty(window, 'showDirectoryPicker', {
+      configurable: true,
+      value: vi.fn(() => Promise.resolve(rememberedDirectory)),
+    })
+    creativeAdapter.buildApprovedCreativeJob.mockResolvedValue(APPROVED_FIXTURE)
+    dispatchController.dispatchApprovedCreativeJob.mockResolvedValue({
+      job: {
+        id: 'job-cont-1', status: 'queued', provider_id: 'fal', model_id: 'fal-ai/flux/schnell',
+        attempt_count: 1, artifact_expires_at: null, cancel_requested: false, created_at: '2026-09-22T00:00:00Z',
+        started_at: null, completed_at: null, error_code: null, message: null,
+        artifact: null,
+      },
+      persisted: APPROVED_FIXTURE_TYPE.sidecar,
+    })
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = input instanceof URL ? input.href : typeof input === 'string' ? input : input.url
+      if (url.endsWith('/api/v1/creative/jobs/job-cont-1')) {
+        return Promise.resolve({
+          ok: true, status: 200,
+          json: () => Promise.resolve({
+            id: 'job-cont-1', status: 'failed', provider_id: 'fal', model_id: 'fal-ai/flux/schnell',
+            attempt_count: 1, artifact_expires_at: null, cancel_requested: false, created_at: '2026-09-22T00:00:00Z',
+            started_at: null, completed_at: '2026-09-22T00:02:00Z', error_code: 'AUTH_REJECTED', message: 'bad key',
+            artifact: null,
+          }),
+        })
+      }
+      return Promise.reject(new Error(`unexpected request: ${url}`))
+    }))
+
+    render(<BerandaApp />)
+    fireEvent.click(screen.getByRole('button', { name: 'Buka proyek' }))
+    await waitFor(() => expect(screen.getByRole('toolbar')).toHaveTextContent('dibuka secara lokal'))
+    fireEvent.change(screen.getByLabelText('Prompt utama'), { target: { value: 'lanjut revisi asset lama' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Setujui prompt' }))
+
+    // Continuity: the dispatch must re-use the asset that already owns rev-1,
+    // not spawn a fresh asset UUID for the regenerate.
+    await waitFor(() => expect(screen.getByRole('log')).toHaveTextContent(/bad key/))
+    const approvedInput = creativeAdapter.buildApprovedCreativeJob.mock.calls[0]![0] as { sessionId: string }
+    expect(approvedInput.sessionId).toBe('1e5c8a02-7b34-4c19-9e2a-6d0f3b8c5a71')
   })
 
   it('places system status beneath Title & Keywords, not in the header', async () => {
@@ -464,8 +592,10 @@ describe('Beranda — setelan: bahasa & API key', () => {
     expect(dialog).toHaveTextContent('Reasoning')
     expect(screen.getByLabelText('API reasoning')).toHaveValue('9router')
     expect(screen.getByLabelText('API reasoning')).toBeDisabled()
-    expect(screen.getByLabelText('Model reasoning')).toHaveValue('assistant-pending')
-    expect(dialog).toHaveTextContent(/assistant belum tersambung/i)
+    // Model reasoning sekarang wajib dipilih manusia — input eksplisit,
+    // kosong secara default, tanpa pilihan auto.
+    expect(screen.getByLabelText('Model reasoning 9Router')).toHaveValue('')
+    expect(dialog).toHaveTextContent(/brainstorm memakai model reasoning ini/i)
   })
 
   it('keeps unsupported image providers fail-closed and shares the desk model', () => {
@@ -477,12 +607,13 @@ describe('Beranda — setelan: bahasa & API key', () => {
     expect(screen.getByLabelText('Kunci baru fal.ai')).toBeVisible()
   })
 
-  it('labels the not-yet-wired reasoning workflow honestly', () => {
+  it('labels the reasoning workflow honestly: human-picked model, no auto', () => {
     render(<BerandaApp />)
     fireEvent.click(screen.getByRole('button', { name: 'Setelan' }))
-    expect(screen.getByText(/brainstorm\/metadata assistant belum tersambung/i)).toBeVisible()
+    expect(screen.getByText(/brainstorm memakai model reasoning ini secara eksplisit/i)).toBeVisible()
     expect(screen.getByLabelText('API reasoning')).toBeDisabled()
-    expect(screen.getByLabelText('Model reasoning')).toBeDisabled()
+    fireEvent.change(screen.getByLabelText('Model reasoning 9Router'), { target: { value: 'qwen/qwen3-32b' } })
+    expect(screen.getByLabelText('Model reasoning 9Router')).toHaveValue('qwen/qwen3-32b')
   })
 
   it('saves a new key through the companion-token envelope', async () => {

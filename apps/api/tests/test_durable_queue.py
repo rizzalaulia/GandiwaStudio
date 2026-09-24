@@ -65,6 +65,28 @@ def test_priority_then_fifo_claim_is_atomic(store: QueueStore) -> None:
     assert store.claim_next("worker-c", lease_seconds=30).id == low
 
 
+def test_queued_position_matches_priority_then_fifo_order(store: QueueStore) -> None:
+    """Issue #26 AC: queue position shown while the job waits.
+
+    Position follows the exact claim_next order: priority DESC, then
+    created_at ASC, then id ASC; running/non-queued jobs disclose None.
+    """
+    low = store.enqueue(job_type="generate", priority=1)
+    high_old = store.enqueue(job_type="generate", priority=5)
+    high_new = store.enqueue(job_type="generate", priority=5)
+
+    assert store.queued_position(high_old) == 1
+    assert store.queued_position(high_new) == 2
+    assert store.queued_position(low) == 3
+
+    first_claimed = store.claim_next("worker-a", lease_seconds=30)
+    assert first_claimed is not None and first_claimed.id == high_old
+    # Claimed job left the queue → position fail-closes to None, never a guess.
+    assert store.queued_position(high_old) is None
+    assert store.queued_position(high_new) == 1
+    assert store.queued_position(low) == 2
+
+
 def test_enqueue_rejects_unknown_state_and_negative_priority(store: QueueStore) -> None:
     with pytest.raises(QueueError, match="priority"):
         store.enqueue(job_type="generate", priority=-1)

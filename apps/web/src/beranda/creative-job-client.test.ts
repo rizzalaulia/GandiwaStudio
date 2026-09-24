@@ -92,4 +92,35 @@ describe('creative job client', () => {
 
     await expect(enqueueApprovedCreativeJob(payload)).rejects.toThrow('GENERATION_READY is blocked')
   })
+
+  it('parses queue_position only when the backend discloses a positive integer', async () => {
+    // Issue #26 AC: queue position shown — parsed verbatim, fail-closed null
+    // when absent, zero, negative, non-integer, atau tipe selain number.
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (url.endsWith('/api/v1/creative/jobs/job-pos')) {
+        return Promise.resolve({
+          ok: true, status: 200,
+          json: () => Promise.resolve({ id: 'job-pos', status: 'queued', provider_id: 'fal', model_id: 'fal-ai/flux/schnell', attempt_count: 0, artifact_expires_at: null, cancel_requested: false, created_at: '2026-09-22T00:00:00+00:00', started_at: null, completed_at: null, error_code: null, message: null, artifact: null, queue_position: 3 }),
+        })
+      }
+      if (url.endsWith('/api/v1/creative/jobs/job-run')) {
+        return Promise.resolve({
+          ok: true, status: 200,
+          json: () => Promise.resolve({ id: 'job-run', status: 'running', provider_id: 'fal', model_id: 'fal-ai/flux/schnell', attempt_count: 1, artifact_expires_at: null, cancel_requested: false, created_at: '2026-09-22T00:00:00+00:00', started_at: null, completed_at: null, error_code: null, message: null, artifact: null, queue_position: null }),
+        })
+      }
+      if (url.endsWith('/api/v1/creative/jobs/job-noise')) {
+        return Promise.resolve({
+          ok: true, status: 200,
+          json: () => Promise.resolve({ id: 'job-noise', status: 'queued', provider_id: 'fal', model_id: 'fal-ai/flux/schnell', attempt_count: 0, artifact_expires_at: null, cancel_requested: false, created_at: '2026-09-22T00:00:00+00:00', started_at: null, completed_at: null, error_code: null, message: null, artifact: null, queue_position: 0 }),
+        })
+      }
+      return Promise.reject(new Error(`unexpected request: ${url}`))
+    }))
+
+    expect((await fetchCreativeJob('job-pos')).queue_position).toBe(3)
+    expect((await fetchCreativeJob('job-run')).queue_position).toBeNull()
+    expect((await fetchCreativeJob('job-noise')).queue_position).toBeNull()
+  })
 })

@@ -107,12 +107,16 @@ def request_owned_cancel(job_id: str, *, owner_session_id: str, settings: Settin
 
 
 def public_job_view(
-    job: QueueJob, artifact_retention_hours: int | None = None
+    job: QueueJob,
+    artifact_retention_hours: int | None = None,
+    queue_position: int | None = None,
 ) -> dict[str, object]:
     """Whitelisted public job state; queue parameters and provider IDs stay private.
 
     artifact_retention_hours (Issue #26: artifact expiry shown) lets callers
     disclose when a finished artifact will be deleted: completed_at + retention.
+    queue_position (Issue #26: queue position shown) is the 1-based order of a
+    queued job within the durable queue; None for any non-queued state.
     """
     artifact: dict[str, object] | None = None
     if isinstance(job.result_manifest, dict):
@@ -159,4 +163,5 @@ def public_job_view(
         "message": job.redacted_error,
         "artifact": artifact,
         "artifact_expires_at": artifact_expires_at,
+        "queue_position": queue_position,
     }

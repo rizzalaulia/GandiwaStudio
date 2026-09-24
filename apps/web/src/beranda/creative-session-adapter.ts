@@ -1,4 +1,4 @@
-import type { CreativeSessionSidecar } from '../creative-session-store'
+import type { CreativeSessionSidecar, LoadedCreativeSession } from '../creative-session-store'
 import type { CreativeJobPayload } from './creative-job-client'
 
 const RULESET = 'adobe-stock-2026-09-08-v1'
@@ -18,6 +18,8 @@ export type ApprovedCreativeInput = Readonly<{
   contentType: ContentType
   human: string
   approvedAt: string
+  previousSession?: LoadedCreativeSession
+  rejectionReason?: string
 }>
 
 export type ApprovedCreativeJob = Readonly<{
@@ -89,11 +91,23 @@ export async function buildApprovedCreativeJob(input: ApprovedCreativeInput): Pr
     approved_at: input.approvedAt,
     prompt_digest: promptDigest,
   }
+  const previous = input.previousSession?.session
+  const lastRevision = previous?.revisions.at(-1)
+  const rejectionReason = input.rejectionReason?.trim()
+  if (lastRevision?.promptDigest === promptDigest && !rejectionReason) {
+    throw new Error('Regenerate identik ditolak: ubah prompt secara bermakna atau catat alasan penolakan.')
+  }
+  // An explicitly justified identical regenerate is a new paid job, not an
+  // idempotent replay of rev-N. Keep promptDigest bound to the exact prompt,
+  // while the queue identity also binds the human rejection reason.
+  const dispatchDigest = rejectionReason
+    ? await sha256(`${promptDigest}:${rejectionReason}`)
+    : promptDigest
   const sidecar: CreativeSessionSidecar = {
     schemaVersion: 1,
     sessionId: input.sessionId,
     topic,
-    rounds: [],
+    rounds: previous?.rounds ?? [],
     prompt: {
       promptText,
       negativePrompt,
@@ -111,10 +125,10 @@ export async function buildApprovedCreativeJob(input: ApprovedCreativeInput): Pr
       ],
       negativeSpaceDecision: stockConstraints.negative_space_decision,
     },
-    approvals: [{
+    approvals: [...(previous?.approvals ?? []), {
       stage: 'prompt', human, approvedAt: input.approvedAt, promptDigest,
     }],
-    revisions: [],
+    revisions: previous?.revisions ?? [],
   }
   return {
     sidecar,
@@ -129,7 +143,7 @@ export async function buildApprovedCreativeJob(input: ApprovedCreativeInput): Pr
         revisions: [],
       },
       rules_snapshot: { id: RULESET, version: RULESET },
-      idempotency_key: `creative-${input.sessionId}-${promptDigest.slice(0, 32)}`,
+      idempotency_key: `creative-${input.sessionId}-${dispatchDigest.slice(0, 32)}`,
     },
   }
 }

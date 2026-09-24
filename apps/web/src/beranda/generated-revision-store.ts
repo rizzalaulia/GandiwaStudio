@@ -20,6 +20,7 @@ export type RecordGeneratedRevisionInput = Readonly<{
   manifestSnapshot: string
   persistedSession: LoadedCreativeSession
   assetId?: string
+  rejectionReason?: string
   jobId: string
   artifact: GeneratedRevisionArtifact
   fetchArtifact: (artifactId: string) => Promise<Readonly<{ bytes: Uint8Array; sha256Header: string }>>
@@ -30,6 +31,7 @@ export type RecordGeneratedRevisionInput = Readonly<{
     sidecarSnapshot: string | undefined
   }>) => Promise<unknown>
   publishManifest: (manifest: ProjectManifest) => Promise<void>
+  readCurrentManifestText?: () => Promise<string>
   newId?: () => string
 }>
 
@@ -97,6 +99,15 @@ export async function recordGeneratedRevision(input: RecordGeneratedRevisionInpu
   const nextRevisionNumber = asset ? Math.max(...asset.revisions.map((entry) => entry.revision)) + 1 : 1
   const relativePath = `revisions/${assetId}/rev-${nextRevisionNumber}.${extension}`
 
+  const readCurrentManifestText = input.readCurrentManifestText
+    ?? (async () => {
+      const handle = await input.directory.getFileHandle('gandiwa-project.json', { create: false })
+      return handle.getFile().then((file) => file.text())
+    })
+  const currentManifestBeforeWrite = await readCurrentManifestText()
+  if (currentManifestBeforeWrite !== snapshotBefore) {
+    throw new Error('project manifest changed externally; reload before writing revision')
+  }
   const revisionsDir = await input.directory.getDirectoryHandle('revisions', { create: true })
   const assetDir = await revisionsDir.getDirectoryHandle(assetId, { create: true })
   const fileName = `rev-${nextRevisionNumber}.${extension}`
@@ -134,7 +145,11 @@ export async function recordGeneratedRevision(input: RecordGeneratedRevisionInpu
     }]
   const nextManifest: ProjectManifest = { ...manifest, assets: nextAssets }
 
-  const promptDigest = session.approvals.find((approval) => approval.promptDigest)?.promptDigest ?? ''
+  // The revision belongs to the approval that dispatched this job. Sessions
+  // append approvals chronologically, so bind provenance to the latest one —
+  // never the first approval from an older revision.
+  const promptDigest = [...session.approvals].reverse()
+    .find((approval) => approval.promptDigest)?.promptDigest ?? ''
   const updatedSession: CreativeSessionSidecar = {
     ...session,
     revisions: [...session.revisions, {
@@ -152,6 +167,7 @@ export async function recordGeneratedRevision(input: RecordGeneratedRevisionInpu
         height: session.prompt.targetHeight,
       },
       createdAt: new Date().toISOString(),
+      ...(input.rejectionReason?.trim() ? { rejectionReason: input.rejectionReason.trim() } : {}),
     }],
   }
   await input.saveSidecar({
@@ -161,6 +177,10 @@ export async function recordGeneratedRevision(input: RecordGeneratedRevisionInpu
     sidecarSnapshot: input.persistedSession.snapshot,
   })
 
+  const currentManifestBeforePublish = await readCurrentManifestText()
+  if (currentManifestBeforePublish !== snapshotBefore) {
+    throw new Error('project manifest changed externally; reload before publishing revision')
+  }
   await input.publishManifest(nextManifest)
   return { bytes: download.bytes, revision, manifest: nextManifest }
 }

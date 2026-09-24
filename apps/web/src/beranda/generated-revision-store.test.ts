@@ -122,6 +122,29 @@ describe('generated revision store — browser-local durable revision from a suc
     expect(outcome.revision.revision).toBe(1)
   })
 
+  it('binds a regenerated revision to the latest prompt approval digest', async () => {
+    const h = harness()
+    const oldDigest = 'a'.repeat(64)
+    const latestDigest = 'b'.repeat(64)
+    const input = {
+      ...h.input,
+      persistedSession: {
+        ...h.input.persistedSession,
+        session: {
+          ...h.input.persistedSession.session,
+          approvals: [
+            { stage: 'prompt' as const, approvedAt: '2026-09-21T00:00:00Z', human: 'Guru', promptDigest: oldDigest },
+            { stage: 'prompt' as const, approvedAt: '2026-09-22T00:00:00Z', human: 'Guru', promptDigest: latestDigest },
+          ],
+        },
+      },
+    }
+
+    await recordGeneratedRevision(input)
+    const saved = h.savedSidecars[0] as { revisions: Array<{ promptDigest: string }> }
+    expect(saved.revisions.at(-1)?.promptDigest).toBe(latestDigest)
+  })
+
   it('rejects before touching disk when the download header disagrees with the job artifact digest', async () => {
     const h = harness()
     h.input.fetchArtifact = vi.fn(() => Promise.resolve({ bytes: new Uint8Array([1, 2, 3, 4]), sha256Header: 'bb'.repeat(32) }))
@@ -183,6 +206,19 @@ describe('generated revision store — browser-local durable revision from a suc
     }))
 
     await expect(recordGeneratedRevision(h.input)).rejects.toThrow('already exists')
+    expect(h.publishedManifests).toEqual([])
+  })
+
+  it('refuses a revision when the on-disk manifest diverges from the approved snapshot (external-change guard)', async () => {
+    const h = harness()
+    const input = {
+      ...h.input,
+      readCurrentManifestText: vi.fn(() => Promise.resolve('{"schema_version":1,"project_id":"3f2b8a64-9c1d-4e7a-b2f5-8d60c1a94e21","project_name":"Demo Stok","assets":[{"asset_id":"updated-externally"}]}')),
+    }
+
+    await expect(recordGeneratedRevision(input as typeof h.input)).rejects.toThrow('project manifest changed externally')
+    expect(h.revisionWrites).toEqual([])
+    expect(h.savedSidecars).toEqual([])
     expect(h.publishedManifests).toEqual([])
   })
 })

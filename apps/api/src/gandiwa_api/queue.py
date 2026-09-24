@@ -327,6 +327,37 @@ class QueueStore:
             raise QueueError("job not found")
         return _row_to_job(row)
 
+    def queued_position(self, job_id: str) -> int | None:
+        """1-based antrean position for a queued job (Issue #26).
+
+        Counts ahead-of-this-job queued rows using the exact claim_next order
+        (priority DESC, created_at ASC, id ASC). Returns None for a job that is
+        not queued (running/waiting/terminal) — fail-closed, never a guess.
+        """
+        with self.engine.connect() as connection:
+            row = connection.execute(
+                text("SELECT status FROM generation_job WHERE id = :id"),
+                {"id": job_id},
+            ).fetchone()
+            if row is None or row[0] != "queued":
+                return None
+            ahead = connection.execute(
+                text(
+                    "SELECT COUNT(*) FROM generation_job AS this "
+                    "JOIN generation_job AS other "
+                    "ON other.status = 'queued' "
+                    "AND other.id <> this.id "
+                    "AND (other.priority > this.priority "
+                    "OR (other.priority = this.priority "
+                    "AND (other.created_at < this.created_at "
+                    "OR (other.created_at = this.created_at "
+                    "AND other.id < this.id)))) "
+                    "WHERE this.id = :id"
+                ),
+                {"id": job_id},
+            ).fetchone()
+        return (ahead[0] + 1) if ahead is not None else None
+
     def claim_next(self, worker_id: str, *, lease_seconds: int) -> QueueJob | None:
         if not worker_id.strip() or lease_seconds < 1:
             raise QueueError("worker and lease are required")

@@ -95,7 +95,12 @@ function baseInput(): RecordGeneratedRevisionInput & Record<string, unknown> {
     saveSidecar: vi.fn(() => Promise.resolve({})),
     publishManifest: vi.fn(() => Promise.resolve()),
   } as unknown as RecordGeneratedRevisionInput & Record<string, unknown>
-  return Object.assign(input, { revisionWrites })
+  return Object.assign(input, {
+    revisionWrites,
+    // Guard external-manifest-change injectable: in-memory fixture memang
+    // identik dengan manifestSnapshot, jadi sweep CAS dianggap cocok.
+    readCurrentManifestText: () => Promise.resolve(input.manifestSnapshot),
+  })
 }
 
 describe('monitorCreativeJobToRevision', () => {

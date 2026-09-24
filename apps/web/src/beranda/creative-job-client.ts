@@ -55,6 +55,8 @@ export type CreativeJob = Readonly<{
   error_code: string | null
   message: string | null
   artifact_expires_at: string | null
+  // Issue #26 AC: 1-based antrean position — hanya saat status queued.
+  queue_position: number | null
   artifact: Readonly<{
     id: string
     media_type: string
@@ -110,6 +112,7 @@ function parseJob(value: unknown): CreativeJob {
     error_code: readString(job, 'error_code', true),
     message: readString(job, 'message', true),
     artifact_expires_at: readString(job, 'artifact_expires_at', true),
+    queue_position: typeof job.queue_position === 'number' && Number.isInteger(job.queue_position) && job.queue_position >= 1 ? job.queue_position : null,
     artifact,
   }
 }
