@@ -17,6 +17,16 @@ export type StatusView = Readonly<{
 
 type RawProvider = Readonly<{ id: string; name: string; configured: boolean; auth_required: boolean }>
 
+// Canonical SETTINGS provider id mapping (24 Sep): the providers registry
+// names connector rows by INSTANCE id (fal, or a 9Router instance like
+// 'mibp'/'studio-a'), while key storage, validation, and the settings rows
+// use the DOCKET provider id ('fal' | '9router'). Forwarding raw ids left the
+// 9Router row searching 'mibp' against a '9router' key: chip said "belum ada
+// key" and the Tes button stayed disabled even with a stored, VALID key
+// (probe answered ok). Map every non-fal connector row onto the 9Router
+// settings id — one stored router key serves the whole instance family.
+const CANONICAL_PROVIDER_IDS: Readonly<Record<string, string>> = { fal: 'fal' }
+
 export async function fetchStatus(): Promise<StatusView> {
   const [statusResponse, providersResponse] = await Promise.all([
     fetch('/api/v1/status', { credentials: 'same-origin', headers: { Accept: 'application/json' } }),
@@ -31,7 +41,7 @@ export async function fetchStatus(): Promise<StatusView> {
   }
   const providers: ProviderChip[] = providersResponse.ok
     ? ((await providersResponse.json()) as RawProvider[]).map((provider) => ({
-        provider: provider.id,
+        provider: CANONICAL_PROVIDER_IDS[provider.id] ?? '9router',
         configured: provider.configured === true,
         testable: provider.configured === true,
       }))

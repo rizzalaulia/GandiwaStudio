@@ -383,7 +383,7 @@ def _probe_post(url: str, headers: dict[str, str]) -> httpx.Response:
     return httpx.post(url, headers=headers, timeout=_PROBE_TIMEOUT_SECONDS, follow_redirects=False)
 
 
-def _probe_provider_auth(provider: str, key: str) -> tuple[bool, str | None]:
+def _probe_provider_auth(provider: str, key: str) -> tuple[bool, str | None, bool]:
     """Ask the REAL provider whether this key authenticates — no billable job.
 
     fal: GET request-status of a nil UUID on the official queue origin; a valid
@@ -391,7 +391,15 @@ def _probe_provider_auth(provider: str, key: str) -> tuple[bool, str | None]:
     gets 401/403. 9Router: GET /v1/models on the first configured instance.
     Never returns or logs the key; network trouble is "unreachable", which is
     NOT a validity verdict.
+    Returns (ok, reason, authenticated). `authenticated` is positive evidence
+    the KEY credentials passed upstream even when the overall verdict fails:
+    fal verifies key credentials before account state (proven 24 Sep — wrong
+    secret 401s, valid key on a locked account 403s), so an account-lockout
+    body on 403/402 means the key is GOOD and the remedy is billing, not
+    re-pasting. reason stays in {"auth_rejected", "account_locked",
+    "unreachable"}.
     """
+    authenticated = False
     try:
         if provider == "fal":
             # fal's queue status endpoint only answers POST (GET is 405 for
@@ -405,21 +413,42 @@ def _probe_provider_auth(provider: str, key: str) -> tuple[bool, str | None]:
         else:
             instances = Settings().NINEROUTER_INSTANCES
             if not instances:
-                return (False, "unreachable")
+                return (False, "unreachable", False)
             origin = next(iter(instances.values())).rstrip("/")
             response = _probe_get(
                 f"{origin}/v1/models",
                 headers={"Authorization": f"Bearer {key}"},
             )
     except (httpx.TimeoutException, httpx.TransportError, OSError):
-        return (False, "unreachable")
+        return (False, "unreachable", False)
     if response.status_code == 404 and provider == "fal":
-        return (True, None)
+        return (True, None, True)
     if provider == "9router" and response.status_code == 200:
-        return (True, None)
-    if response.status_code in (401, 403):
-        return (False, "auth_rejected")
-    return (False, "unreachable")
+        return (True, None, True)
+    if response.status_code == 401:
+        return (False, "auth_rejected", False)
+    if response.status_code in (402, 403):
+        # Read the upstream body before blaming the key: lock/balance wording
+        # names ACCOUNT state (key already authenticated), anything else on
+        # 403 is treated as an auth/permission rejection, fail-closed.
+        detail = ""
+        try:
+            parsed = response.json()
+            if isinstance(parsed, dict):
+                detail_value = parsed.get("detail")
+                if isinstance(detail_value, str):
+                    detail = detail_value
+        except ValueError:
+            detail = response.text[:500]
+        lowered = detail.lower()
+        account_markers = ("locked", "balance", "credit", "quota")
+        authenticated = any(marker in lowered for marker in account_markers)
+        if response.status_code == 402 or authenticated:
+            return (False, "account_locked", True)
+        # A reachable 403 without lock/balance wording is a permission-class
+        # rejection, not a network problem: fail closed to auth_rejected.
+        return (False, "auth_rejected", False)
+    return (False, "unreachable", False)
 
 
 @app.get("/api/v1/settings/providers/{provider}/validate")
@@ -431,10 +460,14 @@ def validate_provider_key(provider: str) -> JSONResponse:
     key = ProviderKeyStore(current_settings).get(provider)
     if key is None:
         raise HTTPException(status_code=409, detail="no key stored for this provider")
-    ok, reason = _probe_provider_auth(provider, key)
+    ok, reason, authenticated = _probe_provider_auth(provider, key)
     body: dict[str, object] = {"ok": ok, "provider": provider, "probe": "provider_auth"}
     if reason is not None:
         body["reason"] = reason
+    if not ok:
+        # Positive evidence only rides failed verdicts: did the KEY itself
+        # authenticate upstream even though the overall answer is no?
+        body["authenticated"] = authenticated
     return JSONResponse(content=body)
 
 

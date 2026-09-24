@@ -107,6 +107,42 @@ async def test_validate_returns_auth_rejected_when_provider_refuses_the_key(
     assert body["reason"] == "auth_rejected"
 
 
+async def test_validate_maps_fal_account_lockout_to_account_locked_and_marks_key_authenticated(
+    tmp_path, monkeypatch, probe
+) -> None:
+    """Key credentials ARE verified before fal reports account-level lockout.
+
+    Proven live against fal (24 Sep): same key id with a wrong secret → 401
+    "invalid key credentials"; the real key with the account locked → 403
+    "User is locked. Reason: Exhausted balance..." So a lockout response is
+    positive evidence the key itself authenticates; the blocker is account
+    state (billing), not the key. The verdict must say so honestly: a lockout
+    is NOT "auth_rejected" (re-pasting cannot fix it) and the 403+lock body
+    carries `authenticated: true` so the UI can name the real remedy.
+    """
+    _env(tmp_path, monkeypatch)
+    lock_body = {
+        "detail": (
+            "User is locked. Reason: Exhausted balance. "
+            "Top up your balance at fal.ai/dashboard/billing."
+        )
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, json=lock_body)
+
+    probe(handler)
+    transport = httpx.ASGITransport(app=real_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        await _save_key(client, "fal", "fal-locked-account-key-123")
+        res = await client.get("/api/v1/settings/providers/fal/validate")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is False
+    assert body["reason"] == "account_locked"
+    assert body["authenticated"] is True
+
+
 async def test_validate_returns_unreachable_not_ok_on_provider_timeout(
     tmp_path, monkeypatch, probe
 ) -> None:
