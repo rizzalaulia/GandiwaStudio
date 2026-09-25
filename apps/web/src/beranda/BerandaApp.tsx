@@ -30,8 +30,6 @@ import { loadCreativeSession, saveCreativeSession, type CreativeSessionDirectory
 import { validateProjectManifest } from '@gandiwa/contracts'
 import {
   fetchProviderOptions,
-  persistSelectedInstance,
-  clearSelectedInstance,
   resolveSelectedInstance,
   type ProviderOption,
 } from '../assistant/router-selection'
@@ -109,7 +107,7 @@ const STRINGS = {
     keyMissing: 'belum ada key',
     keyPlaceholder: 'Tempel kunci API baru di sini',
     keyNote: 'Kunci hanya disimpan di backend, tidak pernah tampil utuh kembali.',
-    testKey: 'Tes',
+    testKey: 'Check connection',
     testValid: 'kunci valid — provider menerima autentikasi',
     testRejected: 'kunci DITOLAK provider — periksa/paste ulang key',
     testAccountLocked: 'kunci SAH — tanpa autentikasi gagal; akun provider terkunci (mis. saldo habis). Selesaikan di dashboard provider; kunci tidak perlu di-paste ulang.',
@@ -200,15 +198,13 @@ type ProviderKeyRowProps = {
   onChange: (value: string) => void
   configured: boolean
   unavailable?: boolean
-  saveProviderKey?: (provider: 'fal' | '9router', apiKey: string) => Promise<void>
-  validateProviderKey?: (provider: 'fal' | '9router') => Promise<void>
+  validateProviderKey?: (provider: 'fal') => void
   testing?: boolean
   keyTest?: { provider: string; note: string; level: 'ok' | 'rejected' | 'account' | 'unreachable' | 'error' } | null
   t: Strings
 }
 
-function ProviderKeyRow({ provider, label, value, onChange, configured, unavailable = false, saveProviderKey, validateProviderKey, testing = false, keyTest = null, t }: ProviderKeyRowProps) {
-  const canSave = !unavailable && value.trim().length > 0 && saveProviderKey !== undefined
+function ProviderKeyRow({ provider, label, value, onChange, configured, unavailable = false, validateProviderKey, testing = false, keyTest = null, t }: ProviderKeyRowProps) {
   const rowTest = keyTest !== null && keyTest.provider === provider ? keyTest : null
   const testLevelClass = rowTest === null ? '' : ` beranda-keytest-${rowTest.level}`
   return (
@@ -223,17 +219,14 @@ function ProviderKeyRow({ provider, label, value, onChange, configured, unavaila
       </label>
       {unavailable && <p className="beranda-note">Connector backend belum tersedia — kunci tidak akan disimpan.</p>}
       <div className="beranda-keyrow-actions">
-        <button type="button" className="beranda-primary" disabled={!canSave} onClick={() => {
-          if (canSave && (provider === 'fal' || provider === '9router')) void saveProviderKey(provider, value.trim())
-        }}>{t.save} {label}</button>
         {!unavailable && validateProviderKey !== undefined && (
           <button
             type="button"
             className={`beranda-btn-test${testLevelClass}`}
             aria-label={`${t.testKey} ${label}`}
-            disabled={!configured || testing}
+            disabled={value.trim().length === 0 || testing}
             onClick={() => {
-              if (provider === 'fal' || provider === '9router') void validateProviderKey(provider)
+              if (provider === 'fal') validateProviderKey(provider)
             }}
           ><span className="beranda-btn-test-icon" aria-hidden="true">{testing ? '⏳' : rowTest === null ? '⚡' : rowTest.level === 'ok' ? '✓' : rowTest.level === 'rejected' ? '✕' : rowTest.level === 'account' ? '🔒' : '⚠'}</span>{testing ? `${t.testKey}…` : t.testKey} {label}</button>
         )}
@@ -241,6 +234,31 @@ function ProviderKeyRow({ provider, label, value, onChange, configured, unavaila
       {rowTest !== null && (
         <p role="status" className={`beranda-keytest beranda-keytest-${rowTest.level}`}>{rowTest.note}</p>
       )}
+    </div>
+  )
+}
+
+type LocalConnectionFieldsProps = Readonly<{
+  name: string; setName: (value: string) => void
+  prefix: string; setPrefix: (value: string) => void
+  apiType: string; setApiType: (value: string) => void
+  baseUrl: string; setBaseUrl: (value: string) => void
+  modelId: string; setModelId: (value: string) => void
+  compact?: boolean
+}>
+
+function LocalConnectionFields({ name, setName, prefix, setPrefix, apiType, setApiType, baseUrl, setBaseUrl, modelId, setModelId, compact = false }: LocalConnectionFieldsProps) {
+  const [checked, setChecked] = useState(false)
+  const complete = baseUrl.trim().length > 0 && modelId.trim().length > 0
+  return (
+    <div className="beranda-local-connection">
+      {!compact && <label className="beranda-field"><span>Nama koneksi</span><input aria-label="Nama koneksi gambar" value={name} onChange={(event) => { setName(event.target.value); setChecked(false) }} placeholder="Mis. studio image API" /></label>}
+      <label className="beranda-field"><span>Tipe API</span><select aria-label={compact ? 'Tipe API reasoning dan metadata' : 'Tipe API gambar'} value={apiType} onChange={(event) => { setApiType(event.target.value); setChecked(false) }}><option value="responses">Responses-compatible</option><option value="chat">Chat Completions-compatible</option><option value="messages">Messages-compatible</option></select></label>
+      {!compact && <label className="beranda-field"><span>Prefix API key</span><input aria-label="Prefix API key gambar" value={prefix} onChange={(event) => { setPrefix(event.target.value); setChecked(false) }} placeholder="Bearer" /></label>}
+      <label className="beranda-field"><span>Base URL</span><input aria-label={compact ? 'Base URL reasoning dan metadata' : 'Base URL gambar'} value={baseUrl} onChange={(event) => { setBaseUrl(event.target.value); setChecked(false) }} placeholder="https://api.example.com/v1" /></label>
+      <label className="beranda-field"><span>Model ID</span><input aria-label={compact ? 'Model ID reasoning dan metadata' : 'Model ID gambar'} value={modelId} onChange={(event) => { setModelId(event.target.value); setChecked(false) }} placeholder="model-id" /></label>
+      <button type="button" className="beranda-btn-test" disabled={!complete} onClick={() => setChecked(true)}>⚡ Check connection</button>
+      {checked && <p role="status" className="beranda-keytest beranda-keytest-ok">Check connection rev3: bentuk isian valid secara lokal. Belum menghubungi provider atau memotong kredit.</p>}
     </div>
   )
 }
@@ -333,13 +351,25 @@ export function BerandaApp() {
       return 'id'
     }
   })
+  // Rev3: dua halaman kerja yang sengaja fokus. Setelan tetap dialog pendukung.
+  const [workPage, setWorkPage] = useState<'create' | 'prepare'>('create')
+  const [metadataReviewed, setMetadataReviewed] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [settingsNote, setSettingsNote] = useState<string | null>(null)
   const [keyTest, setKeyTest] = useState<{ provider: string; note: string; level: 'ok' | 'rejected' | 'account' | 'unreachable' | 'error' } | null>(null)
   const [testingProvider, setTestingProvider] = useState<'fal' | '9router' | null>(null)
 
   const [newFalKey, setNewFalKey] = useState('')
-  const [newRouterKey, setNewRouterKey] = useState('')
+  // Purwarupa rev3: bentuk koneksi lokal, belum dipersist atau dihubungkan.
+  const [imageConnectionKind, setImageConnectionKind] = useState<'fal' | 'openai' | 'self'>('fal')
+  const [imageConnectionName, setImageConnectionName] = useState('')
+  const [imageConnectionPrefix, setImageConnectionPrefix] = useState('')
+  const [imageApiType, setImageApiType] = useState('responses')
+  const [imageBaseUrl, setImageBaseUrl] = useState('')
+  const [imageModelId, setImageModelId] = useState('')
+  const [reasoningProvider, setReasoningProvider] = useState('anthropic')
+  const [reasoningApiType, setReasoningApiType] = useState('messages')
+  const [reasoningBaseUrl, setReasoningBaseUrl] = useState('')
+  const [reasoningModelId, setReasoningModelId] = useState('')
 
   const t: Strings = STRINGS[lang]
 
@@ -404,10 +434,10 @@ export function BerandaApp() {
   const [revisionPreviews, setRevisionPreviews] = useState<Readonly<Record<string, string>>>({})
   const [brainstorm, setBrainstorm] = useState<{ questions: string[]; recommendation: string } | null>(null)
   const [brainstormBusy, setBrainstormBusy] = useState(false)
-  const [assistantInstances, setAssistantInstances] = useState<ProviderOption[] | null>(null)
+  const [, setAssistantInstances] = useState<ProviderOption[] | null>(null)
   const [assistantInstance, setAssistantInstance] = useState<string | null>(null)
   // Ruling #58: instance/model assistant dipilih manusia, tanpa auto-route.
-  const [assistantModel, setAssistantModel] = useState(() => {
+  const [assistantModel] = useState(() => {
     try { return window.localStorage.getItem('beranda-router-model') ?? '' } catch { return '' }
   })
   const [auditLifecycle, setAuditLifecycle] = useState<'EMPTY' | 'STALE' | 'PASS' | 'WARNING' | 'FAIL'>('EMPTY')
@@ -837,6 +867,7 @@ export function BerandaApp() {
       if (!isCurrent()) return
       setMasterRevisionKey(selectedRevisionKey)
       setMasterSelectionSnapshot(saved.snapshot)
+      setMetadataReviewed(false)
       setMasterSelectionMessage(`Master rev-${entry.revision} tersimpan di proyek lokal.`)
     } catch (error) {
       if (!isCurrent()) return
@@ -847,9 +878,12 @@ export function BerandaApp() {
     }
   }, [masterSelectionSnapshot, projectDirectory, projectManifestSnapshot, projectRevisions, selectedRevisionKey])
 
+  const activeWorkRevisionKey = workPage === 'prepare' ? masterRevisionKey : selectedRevisionKey
+  const masterPreviewUrl = masterRevisionKey === null ? '' : revisionPreviews[masterRevisionKey] ?? ''
+
   const handleSaveMetadata = useCallback(async () => {
-    if (projectDirectory === null || projectManifestSnapshot === null || selectedRevisionKey === null) return
-    const entry = projectRevisions.find((candidate) => `${candidate.assetId}/${candidate.revision}` === selectedRevisionKey)
+    if (projectDirectory === null || projectManifestSnapshot === null || activeWorkRevisionKey === null) return
+    const entry = projectRevisions.find((candidate) => `${candidate.assetId}/${candidate.revision}` === activeWorkRevisionKey)
     if (!entry) return
     const operation = ++metadataSequence.current
     const isCurrent = () => operation === metadataSequence.current
@@ -893,11 +927,11 @@ export function BerandaApp() {
     } finally {
       if (isCurrent()) setMetadataBusy(false)
     }
-  }, [aiDisclosure, keywords, loadedMetadata?.snapshot, metadataCategory, projectDirectory, projectManifestSnapshot, projectRevisions, releaseStatus, selectedRevisionKey, title])
+  }, [aiDisclosure, keywords, loadedMetadata?.snapshot, metadataCategory, projectDirectory, projectManifestSnapshot, projectRevisions, releaseStatus, activeWorkRevisionKey, title])
 
   const handleRunAudit = useCallback(async () => {
-    if (projectDirectory === null || projectManifestSnapshot === null || selectedRevisionKey === null) return
-    const entry = projectRevisions.find((candidate) => `${candidate.assetId}/${candidate.revision}` === selectedRevisionKey)
+    if (projectDirectory === null || projectManifestSnapshot === null || activeWorkRevisionKey === null) return
+    const entry = projectRevisions.find((candidate) => `${candidate.assetId}/${candidate.revision}` === activeWorkRevisionKey)
     if (!entry) return
     const operation = ++auditSequence.current
     const isCurrent = () => operation === auditSequence.current
@@ -927,7 +961,7 @@ export function BerandaApp() {
     } finally {
       if (isCurrent()) setAuditBusy(false)
     }
-  }, [auditSnapshot, projectDirectory, projectManifestSnapshot, projectRevisions, selectedRevisionKey])
+  }, [auditSnapshot, projectDirectory, projectManifestSnapshot, projectRevisions, activeWorkRevisionKey])
 
   // Persistent gallery: hydrate thumbnails directly from browser-owned
   // revision files on reopen. Failed/missing files stay honest placeholders.
@@ -981,14 +1015,14 @@ export function BerandaApp() {
   }, [projectDirectory, projectManifestSnapshot])
 
   useEffect(() => {
-    if (projectDirectory === null || projectManifestSnapshot === null || selectedRevisionKey === null) {
+    if (projectDirectory === null || projectManifestSnapshot === null || activeWorkRevisionKey === null) {
       setLoadedMetadata(null)
       setAuditSnapshot(undefined)
       setDurableAudit(null)
       setAuditLifecycle(projectRevisions.length > 0 ? 'STALE' : 'EMPTY')
       return
     }
-    const entry = projectRevisions.find((candidate) => `${candidate.assetId}/${candidate.revision}` === selectedRevisionKey)
+    const entry = projectRevisions.find((candidate) => `${candidate.assetId}/${candidate.revision}` === activeWorkRevisionKey)
     if (!entry) return
     setLoadedMetadata(null)
     setTitle('')
@@ -1043,7 +1077,7 @@ export function BerandaApp() {
       setMetadataBusy(false)
       setAuditBusy(false)
     }
-  }, [projectDirectory, projectManifestSnapshot, projectRevisions, selectedRevisionKey])
+  }, [projectDirectory, projectManifestSnapshot, projectRevisions, activeWorkRevisionKey])
 
   // Blob URL lifecycle: revoke exactly when the displayed image is replaced
   // or the desk unmounts, so no dead blob and no leak.
@@ -1084,79 +1118,22 @@ export function BerandaApp() {
     return () => window.removeEventListener('keydown', onKey)
   }, [settingsOpen])
 
-  async function saveProviderKey(provider: 'fal' | '9router', apiKey: string) {
-    setSettingsNote(null)
-    try {
-      const csrfResponse = await fetch('/api/v1/auth/csrf', { credentials: 'same-origin' })
-      if (!csrfResponse.ok) {
-        setSettingsNote(`Gagal mengambil token keamanan (${csrfResponse.status})`)
-        return
-      }
-      const { csrf_token: csrfToken } = (await csrfResponse.json()) as { csrf_token: string }
-      const response = await fetch('/api/v1/settings/providers', {
-        method: 'POST',
-        headers: companionHeadersForToken(csrfToken),
-        body: JSON.stringify({ providers: [{ provider, apiKey }] }),
-      })
-      if (!response.ok) {
-        setSettingsNote(`Gagal menyimpan (${response.status}) — endpoint backend belum tersedia`)
-        return
-      }
-      setSettingsNote(`${provider} ${t.saved}`)
-      if (provider === 'fal') setNewFalKey('')
-      else setNewRouterKey('')
-      const refreshed = await fetch('/api/v1/providers', { credentials: 'same-origin' })
-      if (refreshed.ok) {
-        const providers = (await refreshed.json()) as Array<{ id: string; configured: boolean }>
-        setStatus((current) =>
-          current
-            ? {
-                ...current,
-                providers: providers.map((entry) => ({
-                  provider: entry.id,
-                  configured: entry.configured,
-                  testable: entry.configured,
-                })),
-              }
-            : current,
-        )
-      }
-    } catch (error) {
-      setSettingsNote(error instanceof Error ? error.message : 'Gagal menyimpan kunci')
-    }
-  }
-
-  async function validateProviderKey(provider: 'fal' | '9router') {
+  function validateProviderKey(provider: 'fal') {
+    // Rev3 is explicitly a local-form prototype: never contact an upstream
+    // provider, create a job, or consume credit from this Settings action.
     setKeyTest(null)
     setTestingProvider(provider)
-    try {
-      const response = await fetch(`/api/v1/settings/providers/${provider}/validate`)
-      if (!response.ok) {
-        setKeyTest({ provider, note: `${t.testError} (${response.status})`, level: 'error' })
-        return
-      }
-      const body = (await response.json()) as { ok: boolean; reason?: string; authenticated?: boolean }
-      if (body.ok) {
-        setKeyTest({ provider, note: t.testValid, level: 'ok' })
-      } else if (body.reason === 'account_locked') {
-        setKeyTest({ provider, note: t.testAccountLocked, level: 'account' })
-      } else if (body.reason === 'auth_rejected') {
-        setKeyTest({ provider, note: t.testRejected, level: 'rejected' })
-      } else {
-        setKeyTest({ provider, note: t.testUnreachable, level: 'unreachable' })
-      }
-    } catch (error) {
-      setKeyTest({ provider, note: error instanceof Error ? error.message : t.testError, level: 'error' })
-    } finally {
-      setTestingProvider(null)
+    const candidate = newFalKey
+    if (candidate.trim().length === 0) {
+      setKeyTest({ provider, note: 'Check connection rev3: isi API key terlebih dahulu; belum ada panggilan API.', level: 'error' })
+    } else {
+      setKeyTest({ provider, note: 'Check connection rev3: bentuk isian valid secara lokal. Belum menghubungi provider atau memotong kredit.', level: 'ok' })
     }
+    setTestingProvider(null)
   }
 
   const target = useMemo(() => resolutionForTier(tier, aspectRatio), [tier, aspectRatio])
-  const keywordCount = useMemo(
-    () => keywords.split(',').map((word) => word.trim()).filter(Boolean).length,
-    [keywords],
-  )
+
   const providerRows = status?.providers ?? []
   const falConfigured = providerRows.some((entry) => entry.provider === 'fal' && entry.configured)
   const generationRuntimeReady = contentType !== 'vector' && status?.backend.ready === true && status.worker.status === 'running' && falConfigured
@@ -1173,7 +1150,7 @@ export function BerandaApp() {
           : null
 
   return (
-    <div className={`beranda ${theme === 'night' ? 'beranda-night' : ''}`}>
+    <div className={`beranda ${theme === 'night' ? 'beranda-night' : ''}`} data-page={workPage}>
       <header className="beranda-header">
         <div className="beranda-header-title">
           <h1>{t.appTitle}</h1>
@@ -1204,6 +1181,12 @@ export function BerandaApp() {
         </div>
       </header>
 
+      <nav className="beranda-workflow-nav" aria-label="Alur kerja">
+        <button type="button" aria-label="Create" aria-current={workPage === 'create' ? 'page' : undefined} className="beranda-workflow-tab" onClick={() => setWorkPage('create')}>Create<span>Buat & pilih gambar</span></button>
+        <button type="button" aria-label="Prepare" aria-current={workPage === 'prepare' ? 'page' : undefined} className="beranda-workflow-tab" disabled={masterRevisionKey === null} onClick={() => setWorkPage('prepare')}>Prepare<span>Audit & metadata</span></button>
+        <p className="beranda-workflow-hint">{workPage === 'create' ? 'Buat beberapa revisi, lalu kunci satu gambar sebagai master.' : 'Rapikan satu master, tinjau metadata, lalu siapkan paket unduh.'}</p>
+      </nav>
+
       <div role="toolbar" aria-label={lang === 'id' ? 'Toolbar proyek' : 'Project toolbar'} className="beranda-toolbar">
         <button type="button" className="beranda-primary" onClick={() => setCreateProjectOpen(true)}>
           {lang === 'id' ? 'Buat proyek baru' : 'Create new project'}
@@ -1223,7 +1206,8 @@ export function BerandaApp() {
         {projectMessage && <span role="status" className="beranda-toolbar-message">{projectMessage}</span>}
       </div>
 
-      <div className="beranda-desk">
+      {workPage === 'create' && (
+      <div className="beranda-desk" role="region" aria-label="Create image">
         <section
           role="region"
           aria-label={t.promptPanel}
@@ -1234,6 +1218,9 @@ export function BerandaApp() {
           <button type="button" className="beranda-ghost" disabled={activeProjectName === null || brainstormBusy} onClick={() => void handleBrainstorm()}>
             {brainstormBusy ? '9Router berpikir…' : 'Brainstorm dengan 9Router'}
           </button>
+          {activeProjectName === null && (
+            <p className="beranda-note">Buka proyek dulu untuk mengaktifkan brainstorm. Brainstorm ini memanggil 9Router: 3 pertanyaan + 1 rekomendasi yang bisa langsung dipakai sebagai prompt.</p>
+          )}
           {brainstorm !== null && (
             <div className="beranda-brainstorm" role="status" aria-label="Hasil brainstorm 9Router">
               <ol>{brainstorm.questions.map((question) => <li key={question}>{question}</li>)}</ol>
@@ -1313,10 +1300,11 @@ export function BerandaApp() {
             <button
               type="button"
               className="beranda-primary beranda-submit"
+              aria-label="Setujui prompt"
               disabled={prompt.trim().length === 0 || generationStatus.state === 'busy' || projectDirectory === null || !generationRuntimeReady}
               onClick={() => void handleApprovePrompt()}
             >
-              {generationStatus.state === 'busy' ? 'Mengirim…' : t.approve}
+              {generationStatus.state === 'busy' ? 'Generating…' : projectRevisions.length > 0 ? 'Regenerate image' : 'Generate image'}
             </button>
             {generationStatus.state === 'busy' && activeJobId !== null && (
               <button
@@ -1438,6 +1426,7 @@ export function BerandaApp() {
                       data-master={masterRevisionKey === key ? 'true' : 'false'}
                       onClick={() => {
                         setSelectedRevisionKey(key)
+                        setMetadataReviewed(false)
                         // Kontinuitas berasal dari pilihan eksplisit pengguna:
                         // asset dari revisi yang dipilih menjadi target
                         // regeneration berikutnya, bukan tebakan sesi lama.
@@ -1470,156 +1459,84 @@ export function BerandaApp() {
                 })}
               </div>
             )}
-            {projectRevisions.length > 0 && (
-              <div className="beranda-master-selection">
-                <button
-                  type="button"
-                  className="beranda-primary"
-                  disabled={selectedRevisionKey === null || masterSelectionBusy}
-                  onClick={() => void handleSetMasterRevision()}
-                >
-                  {masterSelectionBusy ? 'Menyimpan master…' : 'Jadikan revisi terpilih sebagai master'}
-                </button>
-                <p role="status" aria-label="Master revisi">
-                  {masterSelectionMessage ?? (masterRevisionKey === null
-                    ? 'Master belum dipilih — pilih secara eksplisit.'
-                    : `Master: rev-${masterRevisionKey.split('/').at(-1)} · tersimpan`)}
-                </p>
-              </div>
-            )}
-          </div>
-        </section>
-
-        <section
-          role="region"
-          aria-label={t.metaPanel}
-          data-testid="panel-meta"
-          className="beranda-side beranda-side-right"
-        >
-          <h2>{t.metaPanel}</h2>
-          <label className="beranda-field">
-            <span>{t.judul}</span>
-            <input
-              aria-label={t.judul}
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              placeholder={t.judulPlaceholder}
-            />
-          </label>
-          <label className="beranda-field">
-            <span>{t.keywords}</span>
-            <textarea
-              aria-label={t.keywords}
-              rows={6}
-              value={keywords}
-              onChange={(event) => setKeywords(event.target.value)}
-              placeholder={t.keywordsPlaceholder}
-            />
-          </label>
-          <p className="beranda-note" data-testid="keyword-count">
-            {keywordCount} {t.keywordCount}
-          </p>
-          {projectRevisions.length > 0 && (
-            <>
-              <label className="beranda-field">
-                <span>Kategori</span>
-                <input
-                  aria-label="Kategori metadata"
-                  value={metadataCategory}
-                  disabled={metadataBusy}
-                  onChange={(event) => setMetadataCategory(event.target.value)}
-                  placeholder="Contoh: Objects"
-                />
-              </label>
-              <label className="beranda-field">
-                <span>Disclosure AI</span>
-                <input
-                  aria-label="Disclosure AI"
-                  value={aiDisclosure}
-                  disabled={metadataBusy}
-                  onChange={(event) => setAiDisclosure(event.target.value)}
-                  placeholder="Created with generative AI."
-                />
-              </label>
-              <label className="beranda-field">
-                <span>Status release</span>
-                <select
-                  aria-label="Status release"
-                  value={releaseStatus}
-                  disabled={metadataBusy}
-                  onChange={(event) => setReleaseStatus(event.target.value as ReleaseStatus)}
-                >
-                  <option value="not_required">Tidak diperlukan</option>
-                  <option value="attached">Terlampir</option>
-                  <option value="needs_review">Perlu review</option>
-                </select>
-              </label>
-              <button
-                type="button"
-                className="beranda-ghost"
-                disabled={metadataBusy}
-                onClick={() => void handleSaveMetadata()}
-              >
-                {metadataBusy ? 'Menyimpan metadata…' : 'Simpan metadata revisi'}
-              </button>
-              {metadataMessage && <p role="status" className="beranda-note">{metadataMessage}</p>}
-            </>
-          )}
-          <section className="beranda-audit-lifecycle" aria-label="Audit revisi aktif">
-            <strong>{auditLifecycle === 'EMPTY'
-              ? 'Belum ada revisi untuk diaudit'
-              : `${auditLifecycle} — export ${auditLifecycle === 'PASS' ? 'menunggu approval' : 'BLOCKED'}`}</strong>
-            <p>{auditMessage ?? (auditLifecycle === 'STALE'
-              ? 'Revisi aktif menunggu preflight terikat asset, revision, checksum metadata, dan ruleset.'
-              : auditLifecycle === 'EMPTY'
-                ? 'Hasil generate pertama akan masuk pipeline audit dalam keadaan STALE/BLOCKED.'
-                : `Durable audit ${auditLifecycle} terikat revisi aktif.`)}</p>
-            {durableAudit?.findings.map((finding) => (
-              <p key={finding.ruleId} className="beranda-note">
-                <strong>{finding.verdict}</strong> · {finding.ruleId} — {finding.message}
-              </p>
-            ))}
-            {projectRevisions.length > 0 && (
+            <div className="beranda-master-selection">
+              <p className="beranda-note">Tombol ini aktif setelah ada minimal satu hasil generate: pilih revisi, lalu kunci sebagai master.</p>
               <button
                 type="button"
                 className="beranda-primary"
-                disabled={auditBusy || loadedMetadata === null}
-                onClick={() => void handleRunAudit()}
+                disabled={selectedRevisionKey === null || masterSelectionBusy}
+                onClick={() => void handleSetMasterRevision()}
               >
-                {auditBusy ? 'Menjalankan audit…' : 'Jalankan preflight revisi'}
+                {masterSelectionBusy ? 'Locking master…' : 'Lock this image as master'}
               </button>
-            )}
-            {projectRevisions.length > 0 && loadedMetadata === null && (
-              <p className="beranda-note">Simpan metadata valid terlebih dahulu sebelum audit.</p>
-            )}
+              <p role="status" aria-label="Master revisi">
+                {masterSelectionMessage ?? (masterRevisionKey === null
+                  ? (projectRevisions.length === 0
+                    ? 'Belum ada revisi — generate gambar untuk mengunci master.'
+                    : 'Master belum dipilih — pilih secara eksplisit.')
+                  : `Master: rev-${masterRevisionKey.split('/').at(-1)} · tersimpan`)}
+              </p>
+              <button type="button" className="beranda-toolbar-button" disabled={masterRevisionKey === null} onClick={() => setWorkPage('prepare')}>Prepare this image</button>
+            </div>
+          </div>
+        </section>
+
+      </div>
+      )}
+
+      {workPage === 'prepare' && (
+        <section className="beranda-prepare" role="region" aria-label="Prepare selected image">
+          <aside className="beranda-prepare-audit">
+            <h2>Audit gambar</h2>
+            <ul>
+              <li>{masterRevisionKey ? '✓ Gambar master sudah dipilih' : '○ Pilih gambar master di Create'}</li>
+              <li>{prompt.trim() ? '✓ Batasan stok dari prompt tercatat' : '○ Prompt belum tercatat'}</li>
+              <li>{auditLifecycle === 'PASS' ? '✓ Audit internal selesai' : `○ Audit internal: ${auditLifecycle}`}</li>
+            </ul>
+            <p>Adobe-ready berarti lolos gerbang internal Gandiwa, bukan jaminan penerimaan Adobe Stock.</p>
+            <section className="beranda-audit-lifecycle" aria-label="Audit revisi aktif">
+              <strong>{auditLifecycle === 'EMPTY'
+                ? 'Belum ada revisi untuk diaudit'
+                : `${auditLifecycle} — export ${auditLifecycle === 'PASS' ? 'menunggu approval' : 'BLOCKED'}`}</strong>
+              <p>{auditMessage ?? (auditLifecycle === 'STALE'
+                ? 'Master menunggu preflight terikat asset, revision, checksum metadata, dan ruleset.'
+                : auditLifecycle === 'EMPTY'
+                  ? 'Pilih dan kunci master sebelum menjalankan audit.'
+                  : `Durable audit ${auditLifecycle} terikat master terpilih.`)}</p>
+              {durableAudit?.findings.map((finding) => (
+                <p key={finding.ruleId} className="beranda-note"><strong>{finding.verdict}</strong> · {finding.ruleId} — {finding.message}</p>
+              ))}
+              <button type="button" className="beranda-toolbar-button" disabled={auditBusy || loadedMetadata === null || masterRevisionKey === null} onClick={() => void handleRunAudit()}>{auditBusy ? 'Menjalankan audit…' : 'Jalankan preflight revisi'}</button>
+              {loadedMetadata === null && <p className="beranda-note">Simpan metadata valid master terlebih dahulu sebelum audit.</p>}
+            </section>
+          </aside>
+          <section className="beranda-prepare-master" aria-label="Gambar master">
+            <h2>Gambar master</h2>
+            <div className={`beranda-stage ${masterPreviewUrl ? 'beranda-stage-loaded' : ''}`} data-testid="prepare-master-stage" data-master-revision={masterRevisionKey ?? ''}>
+              {masterPreviewUrl ? <img src={masterPreviewUrl} alt="Gambar master terpilih" className="beranda-stage-art" /> : <p className="beranda-stage-empty">Preview master tersedia setelah revisi master dibaca dari proyek lokal.</p>}
+            </div>
           </section>
-          <section
-            role="region"
-            aria-label={t.backend === 'Backend' ? 'Status sistem' : 'System status'}
-            className="beranda-system-pulse"
-          >
-            <div className="beranda-system-pulse-head">
-              <span>{t.backend === 'Backend' ? 'Status sistem' : 'System status'}</span>
-              <span className="beranda-system-pulse-note">live</span>
+          <section className="beranda-prepare-metadata" aria-label="Metadata selected image">
+            <h2>Title, keywords, dan description</h2>
+            <div className="beranda-metadata-actions" aria-label="Bantuan metadata AI">
+              <button type="button" className="beranda-toolbar-button" disabled title="Generator metadata belum terhubung pada purwarupa rev3">Generate title — belum tersedia</button>
+              <button type="button" className="beranda-toolbar-button" disabled title="Generator metadata belum terhubung pada purwarupa rev3">Generate keywords — belum tersedia</button>
+              <button type="button" className="beranda-toolbar-button" disabled title="Generator metadata belum terhubung pada purwarupa rev3">Generate metadata — belum tersedia</button>
             </div>
-            <div className="beranda-system-grid">
-              <span className={`beranda-system-item beranda-system-${status ? status.backend.health : 'wait'}`}>
-                <b>{t.backend}</b><small>{status ? status.backend.health : '…'}</small>
-              </span>
-              <span className="beranda-system-item">
-                <b>{t.worker}</b><small>{status ? status.worker.status : '…'}</small>
-              </span>
-              {providerRows.length > 0 ? providerRows.map((provider) => (
-                <span key={provider.provider} className={`beranda-system-item ${provider.configured ? 'beranda-system-ok' : ''}`}>
-                  <b>{providerLabel(provider.provider)}</b><small>{provider.configured ? t.keyConfigured : t.noKey}</small>
-                </span>
-              )) : (
-                <span className="beranda-system-item"><b>{t.provider}</b><small>{status ? t.empty : '…'}</small></span>
-              )}
-            </div>
+            <label className="beranda-field"><span>{t.judul}</span><input aria-label={t.judul} value={title} onChange={(event) => { setTitle(event.target.value); setMetadataReviewed(false) }} placeholder={t.judulPlaceholder} /></label>
+            <label className="beranda-field"><span>{t.keywords}</span><textarea aria-label={t.keywords} rows={4} value={keywords} onChange={(event) => { setKeywords(event.target.value); setMetadataReviewed(false) }} placeholder={t.keywordsPlaceholder} /></label>
+            <label className="beranda-field"><span>Description</span><textarea aria-label="Description" rows={4} value={aiDisclosure} onChange={(event) => { setAiDisclosure(event.target.value); setMetadataReviewed(false) }} placeholder="Describe only what is visible in the selected image." /></label>
+            <label className="beranda-field"><span>Kategori</span><input aria-label="Kategori metadata" value={metadataCategory} disabled={metadataBusy} onChange={(event) => { setMetadataCategory(event.target.value); setMetadataReviewed(false) }} placeholder="Contoh: Objects" /></label>
+            <label className="beranda-field"><span>Disclosure AI</span><input aria-label="Disclosure AI" value={aiDisclosure} disabled={metadataBusy} onChange={(event) => { setAiDisclosure(event.target.value); setMetadataReviewed(false) }} placeholder="Created with generative AI." /></label>
+            <label className="beranda-field"><span>Status release</span><select aria-label="Status release" value={releaseStatus} disabled={metadataBusy} onChange={(event) => { setReleaseStatus(event.target.value as ReleaseStatus); setMetadataReviewed(false) }}><option value="not_required">Tidak diperlukan</option><option value="attached">Terlampir</option><option value="needs_review">Perlu review</option></select></label>
+            <button type="button" className="beranda-toolbar-button" disabled={metadataBusy} onClick={() => void handleSaveMetadata()}>{metadataBusy ? 'Menyimpan metadata…' : 'Simpan metadata revisi'}</button>
+            <label className="beranda-review"><input type="checkbox" checked={metadataReviewed} onChange={(event) => setMetadataReviewed(event.target.checked)} /> I reviewed the title, keywords, and description for this selected image.</label>
+            <button type="button" className="beranda-primary beranda-download-ready" disabled title="Paket unduhan belum terhubung pada purwarupa rev3">Download ready — belum tersedia</button>
+            <p className="beranda-note">Paket unduhan belum terhubung pada purwarupa rev3; tombol tetap terkunci dan tidak mengunduh gambar atau mengirim ke Adobe.</p>
+            {metadataMessage && <p role="status" className="beranda-note">{metadataMessage}</p>}
           </section>
         </section>
-      </div>
+      )}
 
       {isCreateProjectOpen && (
         <div className="beranda-scrim" onClick={() => setCreateProjectOpen(false)}>
@@ -1693,8 +1610,8 @@ export function BerandaApp() {
               </div>
               <p className="beranda-settings-purpose">
                 {lang === 'id'
-                  ? 'Bahasa antarmuka dan koneksi AI. Kunci hanya disimpan di backend, tidak pernah tampil utuh kembali.'
-                  : 'Interface language and AI connections. Keys are stored server-side only and are never shown back in full.'}
+                  ? 'Bahasa antarmuka dan bentuk koneksi AI. Purwarupa ini tidak menyimpan kunci atau menghubungi provider.'
+                  : 'Interface language and AI connection forms. This prototype does not store keys or contact providers.'}
               </p>
               <ul className="beranda-settings-live">
                 <li>
@@ -1715,6 +1632,10 @@ export function BerandaApp() {
               <section aria-labelledby="beranda-settings-lang">
                 <h4 id="beranda-settings-lang">{t.language}</h4>
                 <label className="beranda-radio">
+                  <input type="radio" name="beranda-lang" onChange={() => changeLang(navigator.language.toLowerCase().startsWith('id') ? 'id' : 'en')} />
+                  <span>Ikuti bahasa perangkat</span>
+                </label>
+                <label className="beranda-radio">
                   <input type="radio" name="beranda-lang" checked={lang === 'id'} onChange={() => changeLang('id')} />
                   <span>Bahasa Indonesia</span>
                 </label>
@@ -1724,62 +1645,33 @@ export function BerandaApp() {
                 </label>
               </section>
               <section aria-labelledby="beranda-settings-keys">
-                <h4 id="beranda-settings-keys">{t.apiKeys}</h4>
-                <p className="beranda-note">{t.keyNote}</p>
-                <section className="beranda-api-role" aria-label="Image generation">
-                  <div className="beranda-api-role-head"><strong>Image generation</strong><span>1 gambar / job</span></div>
-                  <label className="beranda-field"><span>API</span>
-                    <select aria-label="API image generation" value="fal" disabled>
-                      <option value="fal">fal.ai · aktif</option>
-                      <option value="openai-sunburst" disabled>OpenAI · gpt-2.5-sunburst · belum tersedia</option>
+                <h4 id="beranda-settings-keys">Koneksi purwarupa</h4>
+                <p className="beranda-note">Setelan ini hanya memeriksa kelengkapan isian di perangkat. Belum menyimpan kunci, menghubungi API, atau mengubah provider pekerjaan yang sedang berjalan.</p>
+                <section className="beranda-api-role" aria-label="Image provider">
+                  <div className="beranda-api-role-head"><strong>Image provider</strong><span>untuk halaman Create</span></div>
+                  <label className="beranda-field"><span>Provider</span>
+                    <select aria-label="Provider gambar" value={imageConnectionKind} onChange={(event) => setImageConnectionKind(event.target.value as 'fal' | 'openai' | 'self')}>
+                      <option value="fal">fal.ai</option>
+                      <option value="openai">OpenAI-compatible</option>
+                      <option value="self">Custom provider</option>
                     </select>
                   </label>
-                  <label className="beranda-field"><span>Model</span>
-                    <select aria-label="Model image generation" value={model} onChange={(event) => setModel(event.target.value)}>
-                      {MODEL_OPTIONS.map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
-                    </select>
-                  </label>
-                  <ProviderKeyRow provider="fal" label="fal.ai" value={newFalKey} onChange={setNewFalKey} configured={providerRows.find((entry) => entry.provider === 'fal')?.configured === true} saveProviderKey={saveProviderKey} validateProviderKey={validateProviderKey} testing={testingProvider === 'fal'} keyTest={keyTest} t={t} />
+                  {imageConnectionKind === 'fal' ? (
+                    <ProviderKeyRow provider="fal" label="fal.ai" value={newFalKey} onChange={setNewFalKey} configured={providerRows.find((entry) => entry.provider === 'fal')?.configured === true} validateProviderKey={validateProviderKey} testing={testingProvider === 'fal'} keyTest={keyTest} t={t} />
+                  ) : (
+                    <LocalConnectionFields name={imageConnectionName} setName={setImageConnectionName} prefix={imageConnectionPrefix} setPrefix={setImageConnectionPrefix} apiType={imageApiType} setApiType={setImageApiType} baseUrl={imageBaseUrl} setBaseUrl={setImageBaseUrl} modelId={imageModelId} setModelId={setImageModelId} />
+                  )}
                 </section>
-                <section className="beranda-api-role" aria-label="Reasoning">
-                  <div className="beranda-api-role-head"><strong>Reasoning</strong><span>prompt &amp; metadata</span></div>
-                  <label className="beranda-field"><span>API</span>
-                    <select aria-label="API reasoning" value="9router" disabled>
-                      <option value="9router">9Router · credential saja</option>
+                <section className="beranda-api-role" aria-label="Reasoning and metadata provider">
+                  <div className="beranda-api-role-head"><strong>Reasoning / metadata provider</strong><span>untuk bantu prompt &amp; metadata</span></div>
+                  <label className="beranda-field"><span>Provider</span>
+                    <select aria-label="Provider reasoning dan metadata" value={reasoningProvider} onChange={(event) => setReasoningProvider(event.target.value)}>
+                      <option value="anthropic">Anthropic-compatible</option>
+                      <option value="openai">OpenAI-compatible</option>
                     </select>
                   </label>
-                  <label className="beranda-field"><span>Instance</span>
-                    <select
-                      aria-label="Instance reasoning 9Router"
-                      value={assistantInstance ?? ''}
-                      disabled={assistantInstances === null || assistantInstances.length === 0}
-                      onChange={(event) => {
-                        const chosen = event.target.value
-                        if (!chosen) {
-                          clearSelectedInstance()
-                          setAssistantInstance(null)
-                        } else {
-                          persistSelectedInstance(chosen)
-                          setAssistantInstance(chosen)
-                        }
-                      }}
-                    >
-                      <option value="">Pilih instance…</option>
-                      {(assistantInstances ?? []).map((instance) => (
-                        <option key={instance.id} value={instance.id}>{instance.name}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="beranda-field"><span>Model</span>
-                    <input aria-label="Model reasoning 9Router" placeholder="cth. qwen/qwen3-32b — wajib dipilih eksplisit, tanpa auto" value={assistantModel} onChange={(event) => {
-                      setAssistantModel(event.target.value)
-                      try { window.localStorage.setItem('beranda-router-model', event.target.value) } catch { /* sesi saja */ }
-                    }} />
-                  </label>
-                  <p className="beranda-note">Kunci dapat disimpan dan diuji; brainstorm memakai model reasoning ini secara eksplisit.</p>
-                  <ProviderKeyRow provider="9router" label="9Router" value={newRouterKey} onChange={setNewRouterKey} configured={providerRows.find((entry) => entry.provider === '9router')?.configured === true} saveProviderKey={saveProviderKey} validateProviderKey={validateProviderKey} testing={testingProvider === '9router'} keyTest={keyTest} t={t} />
+                  <LocalConnectionFields name="" setName={() => undefined} prefix="" setPrefix={() => undefined} apiType={reasoningApiType} setApiType={setReasoningApiType} baseUrl={reasoningBaseUrl} setBaseUrl={setReasoningBaseUrl} modelId={reasoningModelId} setModelId={setReasoningModelId} compact />
                 </section>
-                {settingsNote && <p role="status" className="beranda-note">{settingsNote}</p>}
               </section>
             </div>
           </section>

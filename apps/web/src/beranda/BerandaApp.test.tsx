@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { BerandaApp } from './BerandaApp'
@@ -269,7 +269,7 @@ describe('Beranda — meja kerja studio', () => {
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
     expect(screen.getByRole('region', { name: 'Kanvas hasil' })).toBeVisible()
     expect(screen.getByRole('region', { name: 'Layout prompt' })).toBeVisible()
-    expect(screen.getByRole('region', { name: 'Title & Keywords' })).toBeVisible()
+    expect(screen.queryByRole('region', { name: 'Title & Keywords' })).not.toBeInTheDocument()
     const toolbar = screen.getByRole('toolbar', { name: 'Toolbar proyek' })
     expect(toolbar).toContainElement(screen.getByRole('button', { name: 'Buat proyek baru' }))
     expect(toolbar).toContainElement(screen.getByRole('button', { name: 'Buka proyek' }))
@@ -355,11 +355,10 @@ describe('Beranda — meja kerja studio', () => {
     expect(left.contains(screen.getByRole('button', { name: 'Setujui prompt' }))).toBe(true)
   })
 
-  it('keeps title & keywords as their own layout on the right, not a separate page', () => {
+  it('keeps title & keywords out of Create until a master enters Prepare', () => {
     render(<BerandaApp />)
-    const right = screen.getByRole('region', { name: 'Title & Keywords' })
-    expect(right.contains(screen.getByLabelText('Judul'))).toBe(true)
-    expect(right.contains(screen.getByLabelText('Kata kunci (dipisah koma)'))).toBe(true)
+    expect(screen.queryByRole('region', { name: 'Metadata selected image' })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Judul')).not.toBeInTheDocument()
   })
 
   it('embeds the kandidat strip under the canvas and states the 1:1 ruling', () => {
@@ -434,11 +433,19 @@ describe('Beranda — meja kerja studio', () => {
     const rev1 = screen.getByRole('option', { name: /rev-1/ })
     const rev2 = screen.getByRole('option', { name: /rev-2/ })
     fireEvent.click(rev1)
-    fireEvent.click(screen.getByRole('button', { name: 'Jadikan revisi terpilih sebagai master' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Lock this image as master' }))
     await waitFor(() => expect(screen.getByRole('status', { name: 'Master revisi' })).toHaveTextContent('rev-1'))
     expect(screen.getByRole('status', { name: 'Master revisi' })).toHaveTextContent('tersimpan')
     expect(rev1).toHaveAttribute('data-master', 'true')
     expect(rev2).toHaveAttribute('data-master', 'false')
+
+    // Memilih kandidat lain sesudah lock tidak boleh mengganti identitas kerja Prepare.
+    fireEvent.click(rev2)
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare this image' }))
+    expect(screen.getByTestId('prepare-master-stage')).toHaveAttribute('data-master-revision', expect.stringMatching(/\/1$/))
+    expect(screen.getByRole('button', { name: 'Download ready — belum tersedia' })).toBeDisabled()
+    fireEvent.click(screen.getByRole('checkbox', { name: /I reviewed the title/ }))
+    expect(screen.getByRole('button', { name: 'Download ready — belum tersedia' })).toBeDisabled()
 
     firstMount.unmount()
     render(<BerandaApp />)
@@ -503,18 +510,9 @@ describe('Beranda — meja kerja studio', () => {
     expect(approvedInput.sessionId).toBe('1e5c8a02-7b34-4c19-9e2a-6d0f3b8c5a71')
   })
 
-  it('places system status beneath Title & Keywords, not in the header', async () => {
-    vi.stubGlobal('fetch', RUNTIME_ENDPOINTS(vi.fn(() => Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) }))))
+  it('keeps runtime status out of Create so the page stays focused on image creation', () => {
     render(<BerandaApp />)
-    const status = screen.getByRole('region', { name: 'Status sistem' })
-    const metadata = screen.getByRole('region', { name: 'Title & Keywords' })
-    await waitFor(() => expect(status).toHaveTextContent('fal.ai'))
-    expect(metadata).toContainElement(status)
-    expect(screen.getByRole('banner')).not.toContainElement(status)
-    expect(status).toHaveTextContent('9Router')
-    expect(status).toHaveTextContent('Backend')
-    expect(status).toHaveTextContent('Worker')
-    expect(JSON.stringify(status.textContent)).not.toContain('secret')
+    expect(screen.queryByRole('region', { name: 'Status sistem' })).not.toBeInTheDocument()
   })
 
   it('model picker honors the human pick', () => {
@@ -703,6 +701,10 @@ describe('Beranda — meja kerja studio', () => {
     const firstMount = render(<BerandaApp />)
     fireEvent.click(screen.getByRole('button', { name: 'Buka proyek' }))
     await waitFor(() => expect(screen.getByRole('toolbar')).toHaveTextContent('dibuka secara lokal'))
+    fireEvent.click(screen.getByRole('option', { name: /rev-1/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Lock this image as master' }))
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Master revisi' })).toHaveTextContent('rev-1'))
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare this image' }))
 
     fireEvent.change(screen.getByLabelText('Judul'), { target: { value: 'Ceramic cup with soft studio light' } })
     fireEvent.change(screen.getByLabelText('Kata kunci (dipisah koma)'), { target: { value: 'ceramic, cup, studio, minimal, illustration' } })
@@ -722,6 +724,9 @@ describe('Beranda — meja kerja studio', () => {
     firstMount.unmount()
     render(<BerandaApp />)
     fireEvent.click(screen.getByRole('button', { name: 'Buka proyek' }))
+    await waitFor(() => expect(screen.getByRole('toolbar')).toHaveTextContent('dibuka secara lokal'))
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Master revisi' })).toHaveTextContent('Master: rev-1'))
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare this image' }))
     const reopenedAudit = screen.getByRole('region', { name: 'Audit revisi aktif' })
     await waitFor(() => expect(reopenedAudit).toHaveTextContent('FAIL'))
     expect(reopenedAudit).toHaveTextContent('FAIL · illustration-raster.submission-format')
@@ -782,6 +787,10 @@ describe('Beranda — meja kerja studio', () => {
     render(<BerandaApp />)
     fireEvent.click(screen.getByRole('button', { name: 'Buka proyek' }))
     await waitFor(() => expect(screen.getByRole('toolbar')).toHaveTextContent('dibuka secara lokal'))
+    fireEvent.click(screen.getByRole('option', { name: /rev-1/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Lock this image as master' }))
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Master revisi' })).toHaveTextContent('rev-1'))
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare this image' }))
 
     // Metadata must exist before audit may run (audit binds metadata).
     fireEvent.change(screen.getByLabelText('Judul'), { target: { value: 'Ceramic cup with soft studio light' } })
@@ -814,6 +823,31 @@ describe('Beranda — meja kerja studio', () => {
   })
 })
 
+describe('Beranda — alur rev3 Create → Prepare', () => {
+  afterEach(() => {
+    cleanup()
+    vi.unstubAllGlobals()
+    window.localStorage.clear()
+  })
+
+  it('keeps Create and Prepare as focused work pages, with Prepare gated by an explicit master', () => {
+    render(<BerandaApp />)
+    expect(screen.getByRole('button', { name: 'Create' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('button', { name: 'Prepare' })).not.toHaveAttribute('aria-current')
+    expect(screen.getByRole('button', { name: 'Prepare this image' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Lock this image as master' })).toBeDisabled()
+    expect(screen.getByText(/minimal satu hasil generate/)).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Create image' })).toBeVisible()
+    expect(screen.queryByRole('region', { name: 'Prepare selected image' })).not.toBeInTheDocument()
+  })
+
+  it('keeps Download ready out of Create until a master has reached Prepare', () => {
+    render(<BerandaApp />)
+    expect(screen.queryByRole('button', { name: 'Download ready' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Prepare this image' })).toBeDisabled()
+  })
+})
+
 describe('Beranda — setelan: bahasa & API key', () => {
   afterEach(() => {
     cleanup()
@@ -827,7 +861,7 @@ describe('Beranda — setelan: bahasa & API key', () => {
     const dialog = screen.getByRole('dialog', { name: 'Setelan' })
     expect(dialog).toBeVisible()
     expect(dialog).toHaveTextContent('Bahasa')
-    expect(dialog).toHaveTextContent('API Key')
+    expect(dialog).toHaveTextContent('Koneksi purwarupa')
   })
 
   it('renders the hallmacked settings desk: charcoal mast + light ledger, no tabs', () => {
@@ -846,9 +880,9 @@ describe('Beranda — setelan: bahasa & API key', () => {
     const ledger = dialog.querySelector('.beranda-settings-ledger')
     if (!ledger) throw new Error('dialog Setelan tak punya ledger terang')
     expect(ledger).toHaveTextContent('Bahasa')
-    expect(ledger).toHaveTextContent('Image generation')
-    expect(ledger).toHaveTextContent('Reasoning')
-    expect(screen.queryByRole('tab', { hidden: true })).toBeNull()
+    expect(ledger).toHaveTextContent('Image provider')
+    expect(ledger).toHaveTextContent('Reasoning / metadata provider')
+    expect(dialog.querySelectorAll('[role="tab"]').length).toBe(0)
   })
 
   it('closes the dialog with Escape', () => {
@@ -873,171 +907,49 @@ describe('Beranda — setelan: bahasa & API key', () => {
     expect(screen.queryByRole('button', { name: 'Buka proyek' })).not.toBeInTheDocument()
   })
 
-  it('organizes API management by role, API provider, then model', () => {
+  it('offers the rev3 local provider forms without claiming a backend connector', () => {
     render(<BerandaApp />)
     fireEvent.click(screen.getByRole('button', { name: 'Setelan' }))
-    const dialog = screen.getByRole('dialog', { name: 'Setelan' })
-
-    expect(dialog).toHaveTextContent('Image generation')
-    expect(screen.getByLabelText('API image generation')).toHaveValue('fal')
-    expect(screen.getByLabelText('Model image generation')).toHaveValue('fal-ai/flux/schnell')
-    expect(screen.getByRole('option', { name: 'OpenAI · gpt-2.5-sunburst · belum tersedia' })).toBeDisabled()
-
-    expect(dialog).toHaveTextContent('Reasoning')
-    expect(screen.getByLabelText('API reasoning')).toHaveValue('9router')
-    expect(screen.getByLabelText('API reasoning')).toBeDisabled()
-    // Model reasoning sekarang wajib dipilih manusia — input eksplisit,
-    // kosong secara default, tanpa pilihan auto.
-    expect(screen.getByLabelText('Model reasoning 9Router')).toHaveValue('')
-    expect(dialog).toHaveTextContent(/brainstorm memakai model reasoning ini/i)
+    expect(screen.getByLabelText('Provider gambar')).toHaveValue('fal')
+    fireEvent.change(screen.getByLabelText('Provider gambar'), { target: { value: 'openai' } })
+    expect(screen.getByLabelText('Nama koneksi gambar')).toBeVisible()
+    expect(screen.getByLabelText('Base URL gambar')).toBeVisible()
+    expect(screen.getByLabelText('Model ID gambar')).toBeVisible()
+    expect(screen.getByLabelText('Provider reasoning dan metadata')).toHaveValue('anthropic')
   })
 
-  it('keeps unsupported image providers fail-closed and shares the desk model', () => {
+  it('keeps each local connection check bound to its own provider fields', () => {
     render(<BerandaApp />)
     fireEvent.click(screen.getByRole('button', { name: 'Setelan' }))
-    expect(screen.getByLabelText('API image generation')).toBeDisabled()
-    fireEvent.change(screen.getByLabelText('Model image generation'), { target: { value: 'fal-ai/flux/dev' } })
-    expect(screen.getByLabelText('Model gambar')).toHaveValue('fal-ai/flux/dev')
-    expect(screen.getByLabelText('Kunci baru fal.ai')).toBeVisible()
+    fireEvent.change(screen.getByLabelText('Provider gambar'), { target: { value: 'self' } })
+    const [imageCheck, reasoningCheck] = screen.getAllByRole('button', { name: /Check connection/ })
+    expect(imageCheck).toBeDisabled()
+    expect(reasoningCheck).toBeDisabled()
+    fireEvent.change(screen.getByLabelText('Base URL gambar'), { target: { value: 'https://example.test/v1' } })
+    fireEvent.change(screen.getByLabelText('Model ID gambar'), { target: { value: 'image-1' } })
+    expect(imageCheck).toBeEnabled()
+    expect(reasoningCheck).toBeDisabled()
   })
 
-  it('labels the reasoning workflow honestly: human-picked model, no auto', () => {
-    render(<BerandaApp />)
-    fireEvent.click(screen.getByRole('button', { name: 'Setelan' }))
-    expect(screen.getByText(/brainstorm memakai model reasoning ini secara eksplisit/i)).toBeVisible()
-    expect(screen.getByLabelText('API reasoning')).toBeDisabled()
-    fireEvent.change(screen.getByLabelText('Model reasoning 9Router'), { target: { value: 'qwen/qwen3-32b' } })
-    expect(screen.getByLabelText('Model reasoning 9Router')).toHaveValue('qwen/qwen3-32b')
-  })
 
-  it('saves a new key through the companion-token envelope', async () => {
-    const fetchMock = vi.fn((input: RequestInfo | URL) => {
-      const url = input instanceof URL ? input.href : typeof input === 'string' ? input : input.url
-      if (url.endsWith('/api/v1/auth/csrf')) {
-        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ csrf_token: 'tok-1' }) })
-      }
-      if (url.endsWith('/api/v1/settings/providers')) {
-        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) })
-      }
-      return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) })
-    })
+  it('Check connection rev3 only validates the filled local form and never calls a provider endpoint', async () => {
+    const fetchMock = RUNTIME_ENDPOINTS(vi.fn(() => Promise.reject(new Error('provider must not be called'))))
     vi.stubGlobal('fetch', fetchMock)
     render(<BerandaApp />)
     fireEvent.click(screen.getByRole('button', { name: 'Setelan' }))
-    fireEvent.change(screen.getByLabelText('Kunci baru fal.ai'), { target: { value: 'fal-key-baru' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Simpan fal.ai' }))
-    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('tersimpan'))
-    const postCall = (fetchMock as ReturnType<typeof vi.fn>).mock.calls.find(
-      (call) => String(call[0]).endsWith('/api/v1/settings/providers'),
-    ) as unknown as [string, RequestInit]
-    expect((postCall[1].headers as Record<string, string>)['X-Companion-Token']).toBe('tok-1')
+    fireEvent.change(screen.getByLabelText('Kunci baru fal.ai'), { target: { value: 'local-form-value' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Check connection fal.ai' }))
+    const dialog = screen.getByRole('dialog', { name: 'Setelan' })
+    await waitFor(() => expect(within(dialog).getByRole('status')).toHaveTextContent(/valid secara lokal/i))
+    expect(fetchMock.mock.calls.some((call) => typeof call[0] === 'string' && call[0].includes('/validate'))).toBe(false)
   })
 
-  it('reports an absent backend key endpoint honestly instead of pretending', async () => {
-    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) })))
+  it('Check connection stays disabled until the local key form is filled', () => {
     render(<BerandaApp />)
     fireEvent.click(screen.getByRole('button', { name: 'Setelan' }))
-    fireEvent.change(screen.getByLabelText('Kunci baru 9Router'), { target: { value: 'tok-baru' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Simpan 9Router' }))
-    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('404'))
+    expect(screen.getByRole('button', { name: 'Check connection fal.ai' })).toBeDisabled()
   })
 
-  function mockFetchWith(validateResponse: () => Record<string, unknown>) {
-    return vi.fn((input: RequestInfo | URL) => {
-      const url = input instanceof URL ? input.href : typeof input === 'string' ? input : input.url
-      if (url.endsWith('/api/v1/status')) {
-        return Promise.resolve({
-          ok: true, status: 200,
-          json: () => Promise.resolve({ backend: { health: 'ok', ready: true }, worker: { status: 'running', heartbeat_at: '2026-09-23T00:00:00Z' } }),
-        })
-      }
-      if (url.endsWith('/api/v1/providers')) {
-        return Promise.resolve({
-          ok: true, status: 200,
-          json: () => Promise.resolve([{ id: 'fal', name: 'fal.ai', configured: true, auth_required: true }]),
-        })
-      }
-      if (url.endsWith('/api/v1/settings/providers/fal/validate')) {
-        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(validateResponse()) })
-      }
-      return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) })
-    })
-  }
-
-  it('Tes API button probes the real provider and reports a valid key', async () => {
-    vi.stubGlobal('fetch', mockFetchWith(() => ({ ok: true, provider: 'fal', probe: 'provider_auth' })))
-    render(<BerandaApp />)
-    fireEvent.click(screen.getByRole('button', { name: 'Setelan' }))
-    const tesBtn = await screen.findByRole('button', { name: 'Tes fal.ai' })
-    expect(tesBtn).toBeEnabled() // kunci tersimpan (configured) → boleh dites
-    fireEvent.click(tesBtn)
-    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/kunci valid/))
-  })
-
-  it('Tes API reports a rejected key instead of pretending it works', async () => {
-    vi.stubGlobal('fetch', mockFetchWith(() => ({ ok: false, provider: 'fal', probe: 'provider_auth', reason: 'auth_rejected' })))
-    render(<BerandaApp />)
-    fireEvent.click(screen.getByRole('button', { name: 'Setelan' }))
-    const tesBtn = await screen.findByRole('button', { name: 'Tes fal.ai' })
-    fireEvent.click(tesBtn)
-    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/ditolak provider/i))
-  })
-
-  it('Tes 9Router is enabled from any instance row id and probes the stored key', async () => {
-    // The providers registry names the router row by INSTANCE id (e.g. 'mibp'),
-    // while the key store row is the SETTINGS provider '9router'. The Tes
-    // button must treat every non-fal row as the 9Router family: a stored,
-    // configured key must enable the test and probe /9router/validate —
-    // the row id never blocks it again.
-    const calls: string[] = []
-    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
-      const url = input instanceof URL ? input.href : typeof input === 'string' ? input : input.url
-      if (url.endsWith('/api/v1/status')) {
-        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ backend: { health: 'ok', ready: true }, worker: { status: 'running', heartbeat_at: '2026-09-23T00:00:00Z' } }) })
-      }
-      if (url.endsWith('/api/v1/providers')) {
-        return Promise.resolve({
-          ok: true, status: 200,
-          json: () => Promise.resolve([
-            { id: 'fal', name: 'fal.ai', configured: true, auth_required: true },
-            { id: 'mibp', name: '9Router · mibp', configured: true, auth_required: true },
-          ]),
-        })
-      }
-      if (url.endsWith('/api/v1/settings/providers/9router/validate')) {
-        calls.push(url)
-        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true, provider: '9router', probe: 'provider_auth' }) })
-      }
-      return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) })
-    }))
-    render(<BerandaApp />)
-    fireEvent.click(screen.getByRole('button', { name: 'Setelan' }))
-    const tesBtn = await screen.findByRole('button', { name: 'Tes 9Router' })
-    expect(tesBtn).toBeEnabled()
-    fireEvent.click(tesBtn)
-    await waitFor(() => expect(calls).toContain('/api/v1/settings/providers/9router/validate'))
-    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/kunci valid/))
-  })
-
-  it('Tes API names an account lockout honestly instead of blaming the key', async () => {
-    vi.stubGlobal('fetch', mockFetchWith(() => ({ ok: false, provider: 'fal', probe: 'provider_auth', reason: 'account_locked', authenticated: true })))
-    render(<BerandaApp />)
-    fireEvent.click(screen.getByRole('button', { name: 'Setelan' }))
-    const tesBtn = await screen.findByRole('button', { name: 'Tes fal.ai' })
-    fireEvent.click(tesBtn)
-    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/kunci sah/i))
-    expect(screen.getByRole('status')).toHaveTextContent(/terkunci/i)
-    expect(screen.getByRole('status')).toHaveTextContent(/tidak perlu di-paste ulang/i)
-  })
-
-  it('Tes API distinguishes unreachable network from an invalid key', async () => {
-    vi.stubGlobal('fetch', mockFetchWith(() => ({ ok: false, provider: 'fal', probe: 'provider_auth', reason: 'unreachable' })))
-    render(<BerandaApp />)
-    fireEvent.click(screen.getByRole('button', { name: 'Setelan' }))
-    const tesBtn = await screen.findByRole('button', { name: 'Tes fal.ai' })
-    fireEvent.click(tesBtn)
-    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/tidak terjangkau/))
-  })
 })
 describe('Beranda — mode malam / siang', () => {
   afterEach(() => {
