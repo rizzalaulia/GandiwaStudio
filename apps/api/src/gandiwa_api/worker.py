@@ -24,7 +24,6 @@ from gandiwa_api.connectors.runtime import (
 from gandiwa_api.connectors.task import run_connector_dispatch
 from gandiwa_api.database import create_sqlite_engine
 from gandiwa_api.queue import Handler, QueueStore
-from gandiwa_api.security.provider_key_store import ProviderKeyStore
 from gandiwa_api.security.ssrf import validate_fal_base_url
 
 logger = logging.getLogger(__name__)
@@ -215,7 +214,6 @@ def build_production_worker(
             artifact_downloader=HttpxArtifactDownloader(),
             artifact_store=store,
             origin_validator=origin_validator,
-            api_key=ProviderKeyStore(settings).get("fal"),
         )
 
     return Worker(

@@ -39,6 +39,12 @@ class PromptSnapshot(BaseModel):
     target_height: int = 0
     aspect_ratio: str = ""
     orientation: str = ""
+    # Exact provider request options are approved and digest-bound.
+    generation_operation: str = "generate"
+    source_artifact_id: str | None = None
+    quality: str = "auto"
+    output_format: str = "png"
+    background: str = "auto"
     stock_constraints: StockConstraints | None = None
 
 

@@ -21,6 +21,7 @@ from gandiwa_api.queue import QueueStore
 # provider → model mapping; independent allowlists would permit unsafe cross-
 # provider/model combinations.
 CURRENT_IMAGE_GENERATION_PROVIDER_MODELS: dict[str, frozenset[str]] = {
+    "openai": frozenset({"gpt-image-2.5-sunburst"}),
     "fal": frozenset(
         {
             "fal-ai/flux/schnell",
@@ -31,6 +32,8 @@ CURRENT_IMAGE_GENERATION_PROVIDER_MODELS: dict[str, frozenset[str]] = {
         }
     )
 }
+
+_GENERATION_ORIGINS = {"fal": "https://queue.fal.run", "openai": "https://api.openai.com/v1"}
 
 # Backwards-compatible alias: approval.py is the single digest authority.
 prompt_snapshot_digest = current_prompt_digest
@@ -70,7 +73,7 @@ def enqueue_approved_generation(
     if (
         not owner_session_id
         or not idempotency_key
-        or origin.rstrip("/") != "https://queue.fal.run"
+        or origin.rstrip("/") != _GENERATION_ORIGINS.get(session.prompt.provider_id)
         or not rules_snapshot
         or not isinstance(rules_snapshot.get("id"), str)
         or not str(rules_snapshot.get("id")).strip()
@@ -81,22 +84,48 @@ def enqueue_approved_generation(
             "generation job identity and versioned rules snapshot are required"
         )
     prompt = session.prompt
+    if prompt.provider_id == "openai":
+        if prompt.generation_operation not in {"generate", "edit"}:
+            raise GenerationDispatchError("OpenAI generation operation is invalid")
+        if prompt.generation_operation == "edit" and not prompt.source_artifact_id:
+            raise GenerationDispatchError("OpenAI edit requires an explicit source artifact")
+        if prompt.target_width % 16 or prompt.target_height % 16 or not prompt.target_height:
+            raise GenerationDispatchError("OpenAI dimensions must be multiples of 16")
+        ratio = prompt.target_width / prompt.target_height
+        pixels = prompt.target_width * prompt.target_height
+        if (
+            max(prompt.target_width, prompt.target_height) > 3840
+            or not 1 / 3 <= ratio <= 3
+            or not 655_360 <= pixels <= 8_294_400
+        ):
+            raise GenerationDispatchError("OpenAI dimensions are outside the supported range")
+        generation_payload: dict[str, object] = {
+            "prompt": prompt.prompt_text
+            + (f"\n\nAvoid: {prompt.negative_prompt_text}" if prompt.negative_prompt_text else ""),
+            "size": f"{prompt.target_width}x{prompt.target_height}",
+            "quality": prompt.quality,
+            "output_format": prompt.output_format,
+            "background": prompt.background,
+        }
+        if prompt.generation_operation == "edit":
+            generation_payload["source_artifact_id"] = prompt.source_artifact_id
+        capability = "edit_image" if prompt.generation_operation == "edit" else "generate_image"
+    else:
+        generation_payload = {
+            "prompt": prompt.prompt_text,
+            "negative_prompt": prompt.negative_prompt_text,
+            "image_size": {"width": prompt.target_width, "height": prompt.target_height},
+            "num_images": 1,
+        }
+        capability = "generate_image"
     parameters: dict[str, object] = {
         "origin": origin,
         "idempotency_key": idempotency_key,
-        "capability": "generate_image",
+        "capability": capability,
         "owner_session_id": owner_session_id,
         "approved_prompt_digest": digest,
         "rules_snapshot": dict(rules_snapshot),
-        "generation_payload": {
-            "prompt": prompt.prompt_text,
-            "negative_prompt": prompt.negative_prompt_text,
-            "image_size": {
-                "width": prompt.target_width,
-                "height": prompt.target_height,
-            },
-            "num_images": 1,
-        },
+        "generation_payload": generation_payload,
     }
     job_id = queue.enqueue_generation_idempotent(
         job_type="generate",

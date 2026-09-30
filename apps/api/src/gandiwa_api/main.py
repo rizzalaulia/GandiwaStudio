@@ -316,7 +316,7 @@ def list_providers() -> list[ProviderInfo]:
 # double-submit cookie; the UI's X-Companion-Token alias is honoured by the
 # CSRF middleware exactly like X-CSRF-Token.
 
-_SETTINGS_PROVIDERS = ("fal", "9router")
+_SETTINGS_PROVIDERS = ("fal", "9router", "openai")
 
 
 @app.post("/api/v1/settings/providers")
@@ -410,20 +410,23 @@ def _probe_provider_auth(provider: str, key: str) -> tuple[bool, str | None, boo
                 f"https://queue.fal.run/fal-ai/flux/schnell/requests/{_PROBE_REQUEST_ID}/status",
                 headers={"Authorization": f"Key {key}"},
             )
-        else:
+        elif provider == "9router":
             instances = Settings().NINEROUTER_INSTANCES
             if not instances:
                 return (False, "unreachable", False)
             origin = next(iter(instances.values())).rstrip("/")
             response = _probe_get(
-                f"{origin}/v1/models",
-                headers={"Authorization": f"Bearer {key}"},
+                f"{origin}/v1/models", headers={"Authorization": f"Bearer {key}"}
+            )
+        else:  # openai
+            response = _probe_get(
+                "https://api.openai.com/v1/models", headers={"Authorization": f"Bearer {key}"}
             )
     except (httpx.TimeoutException, httpx.TransportError, OSError):
         return (False, "unreachable", False)
     if response.status_code == 404 and provider == "fal":
         return (True, None, True)
-    if provider == "9router" and response.status_code == 200:
+    if provider in {"9router", "openai"} and response.status_code == 200:
         return (True, None, True)
     if response.status_code == 401:
         return (False, "auth_rejected", False)

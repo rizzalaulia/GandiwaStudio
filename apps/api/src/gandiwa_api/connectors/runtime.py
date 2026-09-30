@@ -22,7 +22,9 @@ from gandiwa_api.config import Settings
 from gandiwa_api.connectors.base import ProviderConnector
 from gandiwa_api.connectors.fal import FalClient
 from gandiwa_api.connectors.ninerouter import NineRouterClient
+from gandiwa_api.connectors.openai import OPENAI_IMAGE_ORIGIN, OpenAIImageClient
 from gandiwa_api.connectors.registry import ConnectorRegistry
+from gandiwa_api.security.providers import configured_provider_key
 from gandiwa_api.security.ssrf import validate_9router_base_url, validate_fal_base_url
 
 
@@ -66,10 +68,17 @@ class HttpxJsonTransport:
     def request(self, **kwargs: Any) -> dict[str, object]:
         origin = str(kwargs["origin"]).rstrip("/")
         path = str(kwargs["path"])
+        payload = kwargs.get("payload")
+        form = kwargs.get("form")
+        files = kwargs.get("files")
+        if payload is not None and (form is not None or files is not None):
+            raise ValueError("provider request cannot mix JSON and multipart payloads")
         response = httpx.request(
             str(kwargs["method"]),
             f"{origin}{path}",
-            json=kwargs.get("payload"),
+            json=payload,
+            data=form,
+            files=files,
             headers=dict(kwargs.get("headers") or {}),
             timeout=float(kwargs.get("timeout_seconds", 30.0)),
             follow_redirects=False,
@@ -219,27 +228,33 @@ def build_generation_registry(
     artifact_downloader: Any,
     artifact_store: ArtifactStore,
     origin_validator: Callable[[str], object] = validate_fal_base_url,
-    api_key: str | None = None,
 ) -> ConnectorRegistry:
-    """Build the one fixed fal generator, or fail closed with an empty registry.
-
-    ``api_key`` is the encrypted Settings-store override. Environment config
-    remains the deployment fallback, but both UI validation and worker dispatch
-    can now consume the same credential authority.
-    """
-    api_key = api_key or settings.fal_api_key()
-    if not api_key or base_transport is None:
+    """Register only configured generators; every provider stays independently fail-closed."""
+    if base_transport is None:
         return ConnectorRegistry({})
-    try:
-        origin_validator(settings.FAL_BASE_URL)
-    except ValueError:
-        return ConnectorRegistry({})
-    connector = FalClient(
-        origin=settings.FAL_BASE_URL,
-        transport=FalCredentialledTransport(api_key, base_transport),
-        artifact_downloader=artifact_downloader,
-        artifact_store=artifact_store,
-        artifact_ttl_seconds=settings.ARTIFACT_RETENTION_HOURS * 3_600,
-        max_artifact_bytes=settings.MAX_ARTIFACT_BYTES,
-    )
-    return ConnectorRegistry({"fal": connector})
+    connectors: dict[str, ProviderConnector] = {}
+    fal_key = configured_provider_key(settings, "fal")
+    if fal_key:
+        try:
+            origin_validator(settings.FAL_BASE_URL)
+        except ValueError:
+            pass
+        else:
+            connectors["fal"] = FalClient(
+                origin=settings.FAL_BASE_URL,
+                transport=FalCredentialledTransport(fal_key, base_transport),
+                artifact_downloader=artifact_downloader,
+                artifact_store=artifact_store,
+                artifact_ttl_seconds=settings.ARTIFACT_RETENTION_HOURS * 3_600,
+                max_artifact_bytes=settings.MAX_ARTIFACT_BYTES,
+            )
+    openai_key = configured_provider_key(settings, "openai")
+    if openai_key:
+        connectors["openai"] = OpenAIImageClient(
+            origin=OPENAI_IMAGE_ORIGIN,
+            transport=CredentialledTransport(openai_key, base_transport),
+            artifact_store=artifact_store,
+            artifact_ttl_seconds=settings.ARTIFACT_RETENTION_HOURS * 3_600,
+            max_artifact_bytes=settings.MAX_ARTIFACT_BYTES,
+        )
+    return ConnectorRegistry(connectors)

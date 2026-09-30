@@ -26,6 +26,7 @@ from gandiwa_api.security.csrf import SESSION_COOKIE_NAME, session_id_from_token
 
 _IDEMPOTENCY_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 _FAL_ORIGIN = "https://queue.fal.run"
+_OPENAI_ORIGIN = "https://api.openai.com/v1"
 
 
 class CreativeJobRequest(BaseModel):
@@ -88,7 +89,11 @@ def enqueue_browser_job(
             owner_session_id=owner_session_id,
             rules_snapshot=payload.rules_snapshot,
             idempotency_key=payload.idempotency_key,
-            origin=_FAL_ORIGIN,
+            origin=(
+                _OPENAI_ORIGIN
+                if payload.session.prompt.provider_id == "openai"
+                else _FAL_ORIGIN
+            ),
         )
         return queue.get(job_id)
     except GenerationDispatchError as error:

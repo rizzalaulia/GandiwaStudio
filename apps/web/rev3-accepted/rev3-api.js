@@ -15,7 +15,8 @@
     rejected: 'Key rejected by the provider. Check the key and paste it again.',
     unreachable: 'Provider cannot be reached, so key validity cannot be confirmed.',
     error: 'Backend connection failed. No key was changed.',
-    openai: 'OpenAI Image connector is not available in Gandiwa backend yet. This selection is locked and no key is sent.',
+    restricted: 'Provider account restricted. Review billing, organization access, or entitlement at the provider dashboard.',
+    limited: 'Provider rate limit reached. Authentication is not confirmed; try the non-generative check later.',
   }
 
   async function asJson(response) {
@@ -54,6 +55,8 @@
     if (!response.ok) throw new Error(text.error)
     if (body.ok === true) return text.valid
     if (body.reason === 'account_locked' && body.authenticated === true) return text.locked
+    if (body.reason === 'account_restricted') return text.restricted
+    if (body.reason === 'rate_limited') return text.limited
     if (body.reason === 'auth_rejected') return text.rejected
     return text.unreachable
   }
@@ -81,16 +84,11 @@
     check.insertAdjacentElement('beforebegin', button)
   }
 
-  function lockOpenAi() {
-    const type = $('#generator-type')
-    if (!type || type.value !== 'openai') return false
-    setFeedback('#connection-feedback', text.openai)
-    return true
-  }
+  const imageProvider = () => $('#generator-type')?.value === 'openai' ? 'openai' : 'fal'
 
   async function refresh() {
     const state = await providerState()
-    setFeedback('#connection-feedback', statusFor('fal', state), true)
+    setFeedback('#connection-feedback', statusFor(imageProvider(), state), true)
     setFeedback('#reasoning-connection-feedback', statusFor('9router', state), true)
   }
 
@@ -98,19 +96,17 @@
     const check = $('#check-connection')
     const key = $('#api-key')
     appendSaveButton('check-connection', 'Save key')
-    $('#generator-type')?.addEventListener('change', () => { if ($('#generator-type').value === 'openai') lockOpenAi() })
+    $('#generator-type')?.addEventListener('change', () => { key.value = ''; refresh().catch(() => setFeedback('#connection-feedback', text.error)) })
     $('#save-check-connection')?.addEventListener('click', async () => {
-      if ($('#generator-type')?.value === 'openai') return void lockOpenAi()
-      if (!key?.value.trim()) return setFeedback('#connection-feedback', 'Enter a fal.ai API key before saving.')
+      if (!key?.value.trim()) return setFeedback('#connection-feedback', 'Enter a provider API key before saving.')
       setFeedback('#connection-feedback', text.saving)
-      try { await save('fal', key.value.trim()); key.value = ''; await refresh(); setFeedback('#connection-feedback', text.saved, true) }
+      try { await save(imageProvider(), key.value.trim()); key.value = ''; await refresh(); setFeedback('#connection-feedback', text.saved, true) }
       catch { setFeedback('#connection-feedback', text.error) }
     })
     check?.addEventListener('click', async (event) => {
       event.stopImmediatePropagation()
-      if ($('#generator-type')?.value === 'openai') return void lockOpenAi()
-      setFeedback('#connection-feedback', 'Checking fal.ai without creating an image…')
-      try { setFeedback('#connection-feedback', await validate('fal'), true) }
+      setFeedback('#connection-feedback', `Checking ${imageProvider()} without creating an image…`)
+      try { const message = await validate(imageProvider()); setFeedback('#connection-feedback', message, message === text.valid) }
       catch { setFeedback('#connection-feedback', text.error) }
     }, true)
   }
@@ -128,7 +124,7 @@
     check?.addEventListener('click', async (event) => {
       event.stopImmediatePropagation()
       setFeedback('#reasoning-connection-feedback', 'Checking 9Router without sending a prompt…')
-      try { setFeedback('#reasoning-connection-feedback', await validate('9router'), true) }
+      try { const message = await validate('9router'); setFeedback('#reasoning-connection-feedback', message, message === text.valid) }
       catch { setFeedback('#reasoning-connection-feedback', text.error) }
     }, true)
   }
