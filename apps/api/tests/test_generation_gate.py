@@ -68,9 +68,7 @@ def test_blocks_when_prompt_text_is_empty() -> None:
     decision = evaluate_generation_readiness(session)
 
     assert decision.ready is False
-    assert [check.name for check in decision.checks if not check.ok] == [
-        "prompt_present"
-    ]
+    assert [check.name for check in decision.checks if not check.ok] == ["prompt_present"]
     assert "prompt_present" in decision.blockers
 
 

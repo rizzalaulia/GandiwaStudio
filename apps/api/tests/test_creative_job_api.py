@@ -1,0 +1,299 @@
+"""Issue #26 HTTP boundary: browser-approved snapshot → owned durable queue job."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import httpx
+import pytest
+from alembic import command
+from alembic.config import Config
+
+from gandiwa_api.config import Settings
+from gandiwa_api.database import create_sqlite_engine
+from gandiwa_api.main import app
+from gandiwa_api.queue import QueueStore
+
+pytestmark = pytest.mark.anyio
+
+
+def _alembic_config(database_url: str) -> Config:
+    root = Path(__file__).resolve().parents[1]
+    config = Config(str(root / "alembic.ini"))
+    config.set_main_option("script_location", str(root / "migrations"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    return config
+
+
+def _payload() -> dict[str, object]:
+    return {
+        "session": {
+            "topic": "Ceramic mug",
+            "human_prompt_approval": True,
+            "approved_prompt_digest": "",  # replaced after client-side digest fixture setup
+            "prompt": {
+                "prompt_text": "Editorial ceramic mug on linen, 2400x1667 output",
+                "negative_prompt_text": "logo, brand, watermark, random text",
+                "content_type": "illustration",
+                "creation_method": "generative_ai",
+                "provider_id": "fal",
+                "model_id": "fal-ai/flux/dev",
+                "target_width": 2400,
+                "target_height": 1667,
+                "aspect_ratio": "3:2",
+                "orientation": "landscape",
+                "stock_constraints": {
+                    "no_logo": True,
+                    "no_brand": True,
+                    "no_watermark": True,
+                    "no_random_text": True,
+                    "no_fake_ui": True,
+                    "no_unintentional_crop": True,
+                    "no_malformed_anatomy": True,
+                    "no_copyrighted_property": True,
+                    "negative_space_decision": "right third open",
+                },
+            },
+        },
+        "rules_snapshot": {
+            "id": "adobe-stock-2026-09-08-v1",
+            "version": "adobe-stock-2026-09-08-v1",
+        },
+        "idempotency_key": "beranda-job-001",
+    }
+
+
+async def _csrf(client: httpx.AsyncClient) -> str:
+    response = await client.get("/api/v1/auth/csrf")
+    assert response.status_code == 200
+    return str(response.json()["csrf_token"])
+
+
+def _approved_payload() -> dict[str, object]:
+    from gandiwa_api.creative.approval import current_prompt_digest
+    from gandiwa_api.creative.models import CreativeSession
+
+    payload = _payload()
+    session = CreativeSession.model_validate(payload["session"])
+    payload["session"]["approved_prompt_digest"] = current_prompt_digest(session)  # type: ignore[index]
+    return payload
+
+
+@pytest.mark.anyio
+async def test_creative_job_requires_rules_snapshot_id_and_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = tmp_path / "creative-rules.sqlite3"
+    artifacts = tmp_path / "artifacts-rules"
+    artifacts.mkdir()
+    command.upgrade(_alembic_config(f"sqlite:///{database}"), "head")
+    monkeypatch.setenv("GANDIWA_DATABASE_URL", f"sqlite:///{database}")
+    monkeypatch.setenv("GANDIWA_ARTIFACT_DIR", str(artifacts))
+    base = _payload()
+    payload = {**base, "rules_snapshot": {"id": "adobe-stock-2026-09-08-v1"}}
+    payload["session"] = dict(base["session"])  # type: ignore[assignment]
+    payload["session"]["approved_prompt_digest"] = ""  # type: ignore[index]  # digest irrelevant: shape gate fires first
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.get("/api/v1/creative/bootstrap")
+        csrf = await _csrf(client)
+
+        missing_version = await client.post(
+            "/api/v1/creative/jobs",
+            json=payload,
+            headers={"X-CSRF-Token": csrf},
+        )
+        assert missing_version.status_code == 422
+        assert "version" in missing_version.json()["detail"]
+
+        version_only = {**base, "rules_snapshot": {"version": "adobe-stock-2026-09-08-v1"}}
+        missing_id = await client.post(
+            "/api/v1/creative/jobs",
+            json=version_only,
+            headers={"X-CSRF-Token": csrf},
+        )
+        assert missing_id.status_code == 422
+        assert "id" in missing_id.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_creative_job_requires_an_owned_session_and_csrf(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = tmp_path / "creative.sqlite3"
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    command.upgrade(_alembic_config(f"sqlite:///{database}"), "head")
+    monkeypatch.setenv("GANDIWA_DATABASE_URL", f"sqlite:///{database}")
+    monkeypatch.setenv("GANDIWA_ARTIFACT_DIR", str(artifacts))
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/api/v1/creative/jobs", json=_payload())
+        assert response.status_code == 403
+
+        csrf = await _csrf(client)
+        response = await client.post(
+            "/api/v1/creative/jobs",
+            json=_payload(),
+            headers={"X-CSRF-Token": csrf},
+        )
+        assert response.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_creative_job_enqueues_only_an_exact_human_approved_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = tmp_path / "creative.sqlite3"
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    command.upgrade(_alembic_config(f"sqlite:///{database}"), "head")
+    monkeypatch.setenv("GANDIWA_DATABASE_URL", f"sqlite:///{database}")
+    monkeypatch.setenv("GANDIWA_ARTIFACT_DIR", str(artifacts))
+    payload = _approved_payload()
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        bootstrap = await client.get("/api/v1/creative/bootstrap")
+        assert bootstrap.status_code == 200
+        assert bootstrap.json() == {"session_ready": True}
+        csrf = await _csrf(client)
+        response = await client.post(
+            "/api/v1/creative/jobs",
+            json=payload,
+            headers={"X-CSRF-Token": csrf},
+        )
+        assert response.status_code == 201
+        job = response.json()
+        assert job["status"] == "queued"
+        assert job["provider_id"] == "fal"
+        assert job["model_id"] == "fal-ai/flux/dev"
+        assert job["artifact"] is None
+        assert "parameters" not in job
+        assert "owner_session_id" not in job
+
+        own_status = await client.get(f"/api/v1/creative/jobs/{job['id']}")
+        assert own_status.status_code == 200
+        assert own_status.json()["id"] == job["id"]
+
+        other = httpx.AsyncClient(transport=transport, base_url="http://test")
+        try:
+            await other.get("/api/v1/creative/bootstrap")
+            denied = await other.get(f"/api/v1/creative/jobs/{job['id']}")
+            assert denied.status_code == 404
+        finally:
+            await other.aclose()
+
+        cancelled = await client.delete(
+            f"/api/v1/creative/jobs/{job['id']}",
+            headers={"X-CSRF-Token": csrf},
+        )
+        assert cancelled.status_code == 200
+        cancelled_view = cancelled.json()
+        assert cancelled_view["cancel_requested"] is True
+        # Issue #26 AC (artifact expiry shown): queued/cancelled tanpa completed_at
+        # tidak boleh mengklaim kedaluwarsa; field tetap ada & null.
+        assert cancelled_view["artifact_expires_at"] is None
+
+        queue = QueueStore(create_sqlite_engine(Settings()))
+        assert queue.get(str(job["id"])).cancel_requested_at is not None
+
+
+@pytest.mark.anyio
+async def test_creative_enqueue_retry_returns_the_owned_existing_job_without_a_second_queue_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = tmp_path / "creative.sqlite3"
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    command.upgrade(_alembic_config(f"sqlite:///{database}"), "head")
+    monkeypatch.setenv("GANDIWA_DATABASE_URL", f"sqlite:///{database}")
+    monkeypatch.setenv("GANDIWA_ARTIFACT_DIR", str(artifacts))
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.get("/api/v1/creative/bootstrap")
+        csrf = await _csrf(client)
+        payload = _approved_payload()
+        first = await client.post(
+            "/api/v1/creative/jobs", json=payload, headers={"X-CSRF-Token": csrf}
+        )
+        retry = await client.post(
+            "/api/v1/creative/jobs", json=payload, headers={"X-CSRF-Token": csrf}
+        )
+        assert first.status_code == 201
+        assert retry.status_code == 201
+        assert retry.json()["id"] == first.json()["id"]
+        queue = QueueStore(create_sqlite_engine(Settings()))
+        assert queue.claim_next("worker-a", lease_seconds=30).id == first.json()["id"]
+        assert queue.claim_next("worker-b", lease_seconds=30) is None
+
+
+@pytest.mark.anyio
+async def test_creative_job_refuses_unapproved_snapshot_before_queue_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = tmp_path / "creative.sqlite3"
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    command.upgrade(_alembic_config(f"sqlite:///{database}"), "head")
+    monkeypatch.setenv("GANDIWA_DATABASE_URL", f"sqlite:///{database}")
+    monkeypatch.setenv("GANDIWA_ARTIFACT_DIR", str(artifacts))
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.get("/api/v1/creative/bootstrap")
+        csrf = await _csrf(client)
+        response = await client.post(
+            "/api/v1/creative/jobs",
+            json=_payload(),
+            headers={"X-CSRF-Token": csrf},
+        )
+        assert response.status_code == 422
+        assert "approval" in response.json()["detail"].lower()
+        queue = QueueStore(create_sqlite_engine(Settings()))
+        assert queue.claim_next("worker", lease_seconds=30) is None
+
+
+def test_public_job_view_discloses_artifact_expiry_when_completed() -> None:
+    """Issue #26 AC: artifact expiry shown = completed_at + retention hours."""
+    from datetime import UTC, datetime, timedelta
+
+    from gandiwa_api.creative.http_api import public_job_view
+    from gandiwa_api.queue import QueueJob
+
+    completed = datetime(2026, 9, 23, 12, 0, 0, tzinfo=UTC)
+    job = QueueJob(
+        id="job-exp",
+        job_type="image_generation",
+        status="succeeded",
+        priority=0,
+        provider_id="fal",
+        model_id="fal-ai/flux/dev",
+        ruleset_snapshot_id=None,
+        parameters={},
+        attempt_count=1,
+        remote_job_id=None,
+        lease_owner=None,
+        lease_expires_at=None,
+        heartbeat_at=None,
+        cancel_requested_at=None,
+        created_at=completed,
+        started_at=completed,
+        completed_at=completed,
+        error_code=None,
+        redacted_error=None,
+        result_manifest={
+            "artifact": {
+                "id": "art-1",
+                "media_type": "image/png",
+                "size_bytes": 10,
+                "sha256": "a" * 64,
+                "width": 16,
+                "height": 16,
+            }
+        },
+    )
+    view = public_job_view(job, artifact_retention_hours=24)
+    assert view["artifact_expires_at"] == (completed + timedelta(hours=24)).isoformat()
+    # Tanpa retention → tidak mengklaim expiry.
+    assert public_job_view(job)["artifact_expires_at"] is None

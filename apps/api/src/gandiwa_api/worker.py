@@ -24,6 +24,7 @@ from gandiwa_api.connectors.runtime import (
 from gandiwa_api.connectors.task import run_connector_dispatch
 from gandiwa_api.database import create_sqlite_engine
 from gandiwa_api.queue import Handler, QueueStore
+from gandiwa_api.security.provider_key_store import ProviderKeyStore
 from gandiwa_api.security.ssrf import validate_fal_base_url
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,7 @@ class Worker:
         handlers: Mapping[str, Handler] | None = None,
         retry_limits: Mapping[str, int] | None = None,
         connector_registry: ConnectorRegistry | None = None,
+        connector_registry_factory: Callable[[], ConnectorRegistry] | None = None,
         connector_job_types: set[str] | frozenset[str] | None = None,
         worker_id: str | None = None,
         lease_seconds: int = 30,
@@ -51,8 +53,13 @@ class Worker:
         self._handlers = dict(handlers or {})
         self._retry_limits = dict(retry_limits or {})
         self._connector_registry = connector_registry
+        self._connector_registry_factory = connector_registry_factory
         self._connector_job_types = frozenset(connector_job_types or ())
-        if self._connector_job_types and self._connector_registry is None:
+        if (
+            self._connector_job_types
+            and self._connector_registry is None
+            and self._connector_registry_factory is None
+        ):
             raise ValueError("connector job types require a connector registry")
         if any(limit < 0 for limit in self._retry_limits.values()):
             raise ValueError("retry limits cannot be negative")
@@ -114,10 +121,15 @@ class Worker:
         heartbeat_thread.start()
         try:
             if job.job_type in self._connector_job_types:
-                assert self._connector_registry is not None
+                registry = (
+                    self._connector_registry_factory()
+                    if self._connector_registry_factory is not None
+                    else self._connector_registry
+                )
+                assert registry is not None
                 run_connector_dispatch(
                     self._queue,
-                    self._connector_registry,
+                    registry,
                     job.id,
                     self._worker_id,
                     lease_seconds=self._lease_seconds,
@@ -195,17 +207,21 @@ def build_production_worker(
     """Wire the production fal connector without placing its key in worker state."""
     engine = create_sqlite_engine(settings)
     store = ArtifactStore(engine, settings.ARTIFACT_DIR)
-    registry = build_generation_registry(
-        settings,
-        base_transport=HttpxJsonTransport(),
-        artifact_downloader=HttpxArtifactDownloader(),
-        artifact_store=store,
-        origin_validator=origin_validator,
-    )
+
+    def registry_factory() -> ConnectorRegistry:
+        return build_generation_registry(
+            settings,
+            base_transport=HttpxJsonTransport(),
+            artifact_downloader=HttpxArtifactDownloader(),
+            artifact_store=store,
+            origin_validator=origin_validator,
+            api_key=ProviderKeyStore(settings).get("fal"),
+        )
+
     return Worker(
         settings,
-        connector_registry=registry,
-        connector_job_types={"generate"} if "fal" in registry.registered_providers else set(),
+        connector_registry_factory=registry_factory,
+        connector_job_types={"generate"},
     )
 
 

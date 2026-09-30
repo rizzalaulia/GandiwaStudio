@@ -52,7 +52,7 @@ Aplikasi tidak memiliki cloud sync bawaan. Cara pengguna menyinkronkan folder an
 - File System Access API ditargetkan untuk Chrome/Edge desktop terbaru.
 - Path absolut tidak disimpan dalam manifest; hanya path relatif.
 - Zustand tidak boleh menjadi cache data backend.
-- Browser tidak boleh menerima provider API key.
+- Form key Setelan (Issue #26) mengirim key sekali jalan lewat sesi HTTPS same-origin + CSRF — tidak ada penyimpanan key di browser (localStorage, file proyek); backend menyimpan terenkripsi-at-rest dan hanya merespons status masked/configured.
 - SVG tidak tepercaya tidak boleh dirender sebelum hasil sanitasi backend diterima.
 - Browser adalah satu-satunya komponen yang boleh menulis ke directory handle pengguna.
 
@@ -173,8 +173,8 @@ CI menggunakan fake provider server dan fixture sintetis. Test nyata provider ad
 - Deployment non-local menggunakan same-origin HTTPS dan secure server-side session.
 - Tailscale dan CORS adalah lapisan jaringan/origin, bukan pengganti autentikasi aplikasi.
 - State-changing request wajib memiliki perlindungan CSRF yang sesuai.
-- BYOK pada MVP berarti pemilik deployment memasang provider key pada backend secret file/environment.
-- Browser tidak menyediakan form key, tidak menerima key dari backend, dan tidak menyimpan key dalam storage apa pun.
+- BYOK pada MVP berarti pemilik deployment memasang provider key pada backend secret file/environment; Issue #26 menambahkan jalur Setelan Form BYOK yang dikirim browser melalui sesi HTTPS same-origin dan CSRF-protected, disimpan backend terenkripsi-at-rest (symmetric cipher dari `SESSION_SECRET`), dan tidak pernah dibaca ulang utuh.
+- `TECHNOLOGY.md` Frontend rule melarang browser menyimpan key dalam storage apa pun (localStorage, file proyek) — form key mengalir sekali jalan ke backend; backend merespons hanya status masked/configured.
 - API hanya mengembalikan status konfigurasi/capability yang tidak dapat dipakai untuk merekonstruksi secret.
 - Log meredaksi Authorization, cookie, token, key, prompt/asset sensitif sesuai kebijakan.
 - Production secret file: `/etc/gandiwa/gandiwa.env`, placeholder saja di repository.

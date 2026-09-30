@@ -12,6 +12,7 @@ license = "Apache-2.0"
 dependencies = [
   "alembic==1.19.2",
   "cairosvg==2.8.2",
+  "cryptography>=50.0.1",
   "defusedxml==0.7.1",
   "fastapi==0.141.1",
   "httpx==0.28.1",

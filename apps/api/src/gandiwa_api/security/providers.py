@@ -57,7 +57,7 @@ def get_configured_providers(settings: Settings) -> list[ProviderInfo]:
         providers.append(
             ProviderInfo(
                 id=instance_id,
-                name=f"9Router · {instance_id}",
+                name="9Router" if instance_id.lower() == "9router" else f"9Router · {instance_id}",
                 configured=configured,
                 auth_required=True,
             )

@@ -1,6 +1,7 @@
 import { ADOBE_STOCK_MVP_RULESET_ID } from '@gandiwa/adobe-rules'
 import type { ApprovalRecord } from './approval-gate'
 import type { AuditDirectory } from './durable-audit-store'
+import { validateMasterSelection } from './master-selection-store'
 
 export type LoadedApproval = Readonly<{ record: ApprovalRecord; snapshot: string }>
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -39,6 +40,28 @@ function expectedEvidence(input: Readonly<{ metadataSnapshot: string; auditSnaps
   if (metadata !== input.metadataSnapshot || audit !== input.auditSnapshot) throw new Error('metadata or audit evidence changed externally; reload and audit again')
 }
 
+async function readMaster(directory: AuditDirectory): Promise<string | undefined> {
+  return readNested(directory, ['reports'], 'master-selection.json')
+}
+
+async function assertMasterBinding(
+  directory: AuditDirectory,
+  assetId: string,
+  revision: number,
+  expectedSnapshot: string | undefined,
+): Promise<string | undefined> {
+  const onDisk = await readMaster(directory)
+  if (onDisk !== expectedSnapshot) throw new Error('master selection changed externally; reload before saving approval')
+  if (onDisk === undefined) return undefined
+  let parsed: unknown
+  try { parsed = JSON.parse(onDisk) } catch { throw new Error('master selection is invalid') }
+  const record = validateMasterSelection(parsed)
+  if (record.assetId !== assetId || record.revision !== revision) {
+    throw new Error('approval target is not the selected master revision; select master again')
+  }
+  return onDisk
+}
+
 async function assertEvidence(directory: AuditDirectory, assetId: string, revision: number, input: Readonly<{ metadataSnapshot: string; auditSnapshot: string }>): Promise<void> {
   expectedEvidence(
     input,
@@ -63,10 +86,11 @@ export async function loadApproval(directory: AuditDirectory, assetId: string, r
   return { record: parsed, snapshot }
 }
 
-export async function saveApproval(input: Readonly<{ directory: AuditDirectory; manifestSnapshot: string; metadataSnapshot: string; auditSnapshot: string; record: ApprovalRecord; existingSnapshot?: string }>): Promise<LoadedApproval> {
+export async function saveApproval(input: Readonly<{ directory: AuditDirectory; manifestSnapshot: string; metadataSnapshot: string; auditSnapshot: string; masterSelectionSnapshot?: string; record: ApprovalRecord; existingSnapshot?: string }>): Promise<LoadedApproval> {
   if (!valid(input.record)) throw new Error('approval record is invalid')
   if (await read(input.directory, 'gandiwa-project.json') !== input.manifestSnapshot) throw new Error('project manifest changed externally; reload before saving approval')
   await assertEvidence(input.directory, input.record.assetId, input.record.revision, input)
+  const masterBinding = await assertMasterBinding(input.directory, input.record.assetId, input.record.revision, input.masterSelectionSnapshot)
   const approvals = await identity(input.directory, input.record.assetId, input.record.revision, true)
   const name = `${input.record.assetId}-r${input.record.revision}.json`
   const current = await read(approvals, name)
@@ -74,6 +98,7 @@ export async function saveApproval(input: Readonly<{ directory: AuditDirectory; 
   const snapshot = `${JSON.stringify(input.record, null, 2)}\n`
   if (await read(input.directory, 'gandiwa-project.json') !== input.manifestSnapshot || await read(approvals, name) !== input.existingSnapshot) throw new Error('approval changed externally; reload before saving')
   await assertEvidence(input.directory, input.record.assetId, input.record.revision, input)
+  if (await readMaster(input.directory) !== masterBinding) throw new Error('master selection changed externally; reload before saving approval')
   const writable = await (await approvals.getFileHandle(name, { create: true })).createWritable()
   await writable.write(snapshot)
   await writable.close()

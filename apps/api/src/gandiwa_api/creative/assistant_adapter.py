@@ -142,9 +142,7 @@ def _require_model(body: dict[str, Any]) -> str:
     return _require_str(body, "model")
 
 
-def brainstorm(
-    transport: AssistantTransport, payload: dict[str, Any]
-) -> BrainstormResult:
+def brainstorm(transport: AssistantTransport, payload: dict[str, Any]) -> BrainstormResult:
     """3-in-1 round: exactly three distinct questions plus one recommendation."""
     requester = _SafeRequester(transport)
     body = requester.request("brainstorm", payload)
@@ -162,9 +160,7 @@ def brainstorm(
     )
 
 
-def finalize_prompt(
-    transport: AssistantTransport, payload: dict[str, Any]
-) -> FinalPromptResult:
+def finalize_prompt(transport: AssistantTransport, payload: dict[str, Any]) -> FinalPromptResult:
     """Author the production prompt and its negative prompt."""
     requester = _SafeRequester(transport)
     body = requester.request("finalize_prompt", payload)
@@ -177,9 +173,7 @@ def finalize_prompt(
     )
 
 
-def analyze_image(
-    transport: AssistantTransport, payload: dict[str, Any]
-) -> AnalyzeImageResult:
+def analyze_image(transport: AssistantTransport, payload: dict[str, Any]) -> AnalyzeImageResult:
     """Advisory vision check. It never sets an audit verdict or gate state."""
     requester = _SafeRequester(transport)
     body = requester.request("analyze_image", payload)
@@ -193,9 +187,7 @@ def analyze_image(
     )
 
 
-def suggest_metadata(
-    transport: AssistantTransport, payload: dict[str, Any]
-) -> MetadataSuggestion:
+def suggest_metadata(transport: AssistantTransport, payload: dict[str, Any]) -> MetadataSuggestion:
     """Metadata suggestion; durable writes only after human confirmation."""
     requester = _SafeRequester(transport)
     body = requester.request("suggest_metadata", payload)

@@ -13,7 +13,7 @@ vi.mock('./project-handle-store', () => ({
   rememberProjectDirectory: handleStore.remember,
 }))
 
-import { App, isCurrentExport, isCurrentPreflight, isCurrentProjectPreflight, isSameApprovalEvidence } from './App'
+import { App, isCurrentExport, isCurrentPreflight, isCurrentProjectPreflight, isSameApprovalEvidence, isSameApprovalMasterSnapshot } from './App'
 
 const PROVIDERS_RESPONSE = {
   ok: true,
@@ -45,6 +45,45 @@ describe('App shell', () => {
       { submissionChecksum: 'a'.repeat(64), metadataChecksum: 'b'.repeat(64) },
       { submissionChecksum: 'c'.repeat(64), metadataChecksum: 'b'.repeat(64) },
     )).toBe(false)
+  })
+
+  it('compares approval master evidence by snapshot bytes, not object identity', () => {
+    const loadOne = { record: { schemaVersion: 1, assetId: 'asset-1', revision: 1, relativePath: 'revisions/rev-1.png', revisionChecksum: 'x1' }, snapshot: 'SNAPSHOT' } as unknown
+    const loadTwo = { record: { schemaVersion: 1, assetId: 'asset-1', revision: 1, relativePath: 'revisions/rev-1.png', revisionChecksum: 'x1' }, snapshot: 'SNAPSHOT' } as unknown
+    const drifted = { record: { schemaVersion: 1, assetId: 'asset-1', revision: 2, relativePath: 'revisions/rev-2.png', revisionChecksum: 'x2' }, snapshot: 'OTHER' } as unknown
+    // Regression: loadMasterSelection returns a fresh object per call; the
+    // approval save must compare snapshot BYTES, or every approval throws.
+    expect(isSameApprovalMasterSnapshot(undefined, undefined)).toBe(true)
+    expect(isSameApprovalMasterSnapshot(loadOne as never, undefined)).toBe(false)
+    expect(isSameApprovalMasterSnapshot(undefined, loadTwo as never)).toBe(false)
+    expect(isSameApprovalMasterSnapshot(loadOne as never, loadTwo as never)).toBe(true)
+    expect(isSameApprovalMasterSnapshot(loadOne as never, drifted as never)).toBe(false)
+  })
+
+  it('releases the audit busy flag at every cross-path preflight invalidation site', () => {
+    const rawModules = import.meta.glob<string>('./App.tsx', { query: '?raw', import: 'default', eager: true })
+    const source: string = rawModules['./App.tsx'] ?? ''
+    const bumpRe = /\n( +)((?:const requestId = \+\+preflightSequence\.current)|(?:\+\+preflightSequence\.current)|(?:preflightSequence\.current \+= 1))/g
+    const sites = [...source.matchAll(bumpRe)].map((match) => {
+      const kind: string = match[2] ?? ''
+      return {
+        owner: kind.startsWith('const requestId'),
+        after: source.slice((match.index ?? 0) + match[0].length, (match.index ?? 0) + match[0].length + 200),
+      }
+    })
+    const owners = sites.filter((site) => site.owner)
+    const invalidations = sites.filter((site) => !site.owner)
+    // Invalidating sites (metadata save, reopen, close, manifest adopt) must
+    // release the shared audit flag synchronously next to the bump.
+    expect(owners.length, 'own-request preflight bumps').toBe(3)
+    expect(invalidations.length, 'cross-path invalidation sites that bump preflightSequence').toBeGreaterThanOrEqual(5)
+    for (const site of invalidations) {
+      expect(site.after.includes('setApprovalBusy(false)'), `invalidation site must synchronously clear the audit busy flag, near: ${site.after.slice(0, 80)}`).toBe(true)
+    }
+    // The audit handler is the ONLY shared-flag holder whose bump uses a
+    // request ticket; its finally must clear the flag UNCONDITIONALLY. A
+    // conditional clear on a superseded audit orphans the flag (wedge).
+    expect(/isCurrentPreflight\([^\n]*setApprovalBusy\(false\)/.test(source), 'the shared audit busy flag must never be cleared conditionally on preflight currency').toBe(false)
   })
 
   beforeEach(() => {

@@ -72,30 +72,40 @@ def enqueue_approved_generation(
         or not idempotency_key
         or origin.rstrip("/") != "https://queue.fal.run"
         or not rules_snapshot
+        or not isinstance(rules_snapshot.get("id"), str)
+        or not str(rules_snapshot.get("id")).strip()
+        or not isinstance(rules_snapshot.get("version"), str)
+        or not str(rules_snapshot.get("version")).strip()
     ):
-        raise GenerationDispatchError("generation job identity and rules snapshot are required")
+        raise GenerationDispatchError(
+            "generation job identity and versioned rules snapshot are required"
+        )
     prompt = session.prompt
-    job_id = queue.enqueue(
+    parameters: dict[str, object] = {
+        "origin": origin,
+        "idempotency_key": idempotency_key,
+        "capability": "generate_image",
+        "owner_session_id": owner_session_id,
+        "approved_prompt_digest": digest,
+        "rules_snapshot": dict(rules_snapshot),
+        "generation_payload": {
+            "prompt": prompt.prompt_text,
+            "negative_prompt": prompt.negative_prompt_text,
+            "image_size": {
+                "width": prompt.target_width,
+                "height": prompt.target_height,
+            },
+            "num_images": 1,
+        },
+    }
+    job_id = queue.enqueue_generation_idempotent(
         job_type="generate",
         provider_id=prompt.provider_id,
         model_id=prompt.model_id,
-        parameters={
-            "origin": origin,
-            "idempotency_key": idempotency_key,
-            "capability": "generate_image",
-            "owner_session_id": owner_session_id,
-            "approved_prompt_digest": digest,
-            "rules_snapshot": dict(rules_snapshot),
-            "generation_payload": {
-                "prompt": prompt.prompt_text,
-                "negative_prompt": prompt.negative_prompt_text,
-                "image_size": {
-                    "width": prompt.target_width,
-                    "height": prompt.target_height,
-                },
-                "num_images": 1,
-            },
-        },
+        parameters=parameters,
+        owner_session_id=owner_session_id,
+        idempotency_key=idempotency_key,
+        approved_prompt_digest=digest,
     )
     session.last_dispatched_prompt_digest = digest
     return job_id

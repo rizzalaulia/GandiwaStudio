@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import tempfile
+import uuid
 from collections.abc import AsyncIterator
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
@@ -12,13 +14,25 @@ from pathlib import Path
 from typing import Literal, TypedDict, cast
 from urllib.parse import quote
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
+from pydantic import BaseModel, ConfigDict, Field
 
 from gandiwa_api.artifact_store import AccessDenied, ArtifactStore, ExpiredArtifact
 from gandiwa_api.config import Settings
+from gandiwa_api.creative import assistant_adapter
+from gandiwa_api.creative.http_api import (
+    CreativeJobRequest,
+    enqueue_browser_job,
+    get_owned_job,
+    public_job_view,
+    request_owned_cancel,
+    require_owned_session,
+)
 from gandiwa_api.database import create_sqlite_engine
+from gandiwa_api.queue import QueueStore
 from gandiwa_api.raster_preflight import DEFAULT_LIMITS as RASTER_PREFLIGHT_LIMITS
 from gandiwa_api.raster_preflight import inspect_raster
 from gandiwa_api.security.artifacts import build_artifact_download_response
@@ -28,8 +42,11 @@ from gandiwa_api.security.csrf import (
     generate_csrf_token,
     session_id_from_token,
     set_csrf_cookie,
+    set_session_cookie,
 )
+from gandiwa_api.security.provider_key_store import ProviderKeyStore
 from gandiwa_api.security.providers import ProviderInfo, get_configured_providers
+from gandiwa_api.security.ssrf import validate_9router_base_url
 from gandiwa_api.svg_preflight import DEFAULT_LIMITS as SVG_PREFLIGHT_LIMITS
 from gandiwa_api.svg_preflight import inspect_svg
 from gandiwa_api.svg_quarantine import SvgQuarantine
@@ -268,9 +285,398 @@ def get_csrf_token() -> JSONResponse:
 
 @app.get("/api/v1/providers")
 def list_providers() -> list[ProviderInfo]:
-    """List available AI connectors configured on backend without exposing secrets."""
+    """List available AI connectors configured on backend without exposing secrets.
+
+    Slice 2 (Issue #26): a key saved through Settings (encrypted store) flips
+    the provider to configured without a restart — env-based config remains
+    the underlying source when the store has no entry.
+    """
     current_settings = Settings()
-    return get_configured_providers(current_settings)
+    providers = get_configured_providers(current_settings)
+    store = ProviderKeyStore(current_settings)
+    if store.get("fal"):
+        providers = [
+            p if p.id != "fal" else p.model_copy(update={"configured": True}) for p in providers
+        ]
+    stored_router_key = store.get("9router")
+    router_providers = [provider for provider in providers if provider.id != "fal"]
+    if stored_router_key and len(router_providers) == 1:
+        router_id = router_providers[0].id
+        providers = [
+            provider
+            if provider.id != router_id
+            else provider.model_copy(update={"configured": True})
+            for provider in providers
+        ]
+    return providers
+
+
+# Slice 2 (Issue #26): Settings API keys — encrypted server-side store.
+# Fail-closed: redacted errors, no secrets in responses, CSRF via the
+# double-submit cookie; the UI's X-Companion-Token alias is honoured by the
+# CSRF middleware exactly like X-CSRF-Token.
+
+_SETTINGS_PROVIDERS = ("fal", "9router")
+
+
+@app.post("/api/v1/settings/providers")
+def save_provider_settings(request: Request, payload: dict[str, object]) -> JSONResponse:
+    current_settings = Settings()
+    entries = payload.get("providers")
+    if not isinstance(entries, list) or not entries:
+        raise HTTPException(status_code=400, detail="payload must contain providers[]")
+    store = ProviderKeyStore(current_settings)
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise HTTPException(status_code=400, detail="each provider entry must be an object")
+        provider = entry.get("provider")
+        key = entry.get("apiKey")
+        if provider not in _SETTINGS_PROVIDERS:
+            raise HTTPException(status_code=400, detail="unknown provider")
+        if not isinstance(key, str) or not key.strip():
+            raise HTTPException(status_code=400, detail="apiKey must be a non-empty string")
+    for entry in entries:
+        store.set(entry["provider"], entry["apiKey"].strip())
+    return JSONResponse(content={"saved": [entry["provider"] for entry in entries]})
+
+
+@app.get("/api/v1/settings/providers")
+def provider_settings_state() -> list[dict[str, object]]:
+    """Masked state only — never returns the stored key material."""
+    current_settings = Settings()
+    store = ProviderKeyStore(current_settings)
+    states: list[dict[str, object]] = []
+    for provider in _SETTINGS_PROVIDERS:
+        key = store.get(provider)
+        states.append(
+            {
+                "provider": provider,
+                "configured": key is not None,
+                "maskedKey": (f"****{key[-4:]}" if key and len(key) >= 4 else None),
+            }
+        )
+    return states
+
+
+@app.get("/api/v1/settings/providers/{provider}/test")
+def test_provider_connection(provider: str) -> JSONResponse:
+    """Compatibility alias for the real upstream authentication probe."""
+    return validate_provider_key(provider)
+
+
+_PROBE_REQUEST_ID = "00000000-0000-0000-0000-000000000000"
+_PROBE_TIMEOUT_SECONDS = 10.0
+_probe_client: httpx.Client | None = None  # test seam; None = real network
+
+
+def _probe_get(url: str, headers: dict[str, str]) -> httpx.Response:
+    """Bounded GET for auth probing; redirects stay off at the connector boundary."""
+    if _probe_client is not None:
+        return _probe_client.get(url, headers=headers, timeout=_PROBE_TIMEOUT_SECONDS)
+    return httpx.get(url, headers=headers, timeout=_PROBE_TIMEOUT_SECONDS, follow_redirects=False)
+
+
+def _probe_post(url: str, headers: dict[str, str]) -> httpx.Response:
+    """Bounded body-less POST for fal queue-status auth probing."""
+    if _probe_client is not None:
+        return _probe_client.post(url, headers=headers, timeout=_PROBE_TIMEOUT_SECONDS)
+    return httpx.post(url, headers=headers, timeout=_PROBE_TIMEOUT_SECONDS, follow_redirects=False)
+
+
+def _probe_provider_auth(provider: str, key: str) -> tuple[bool, str | None, bool]:
+    """Ask the REAL provider whether this key authenticates — no billable job.
+
+    fal: GET request-status of a nil UUID on the official queue origin; a valid
+    key passes auth and reaches the 404 "request not found", an invalid key
+    gets 401/403. 9Router: GET /v1/models on the first configured instance.
+    Never returns or logs the key; network trouble is "unreachable", which is
+    NOT a validity verdict.
+    Returns (ok, reason, authenticated). `authenticated` is positive evidence
+    the KEY credentials passed upstream even when the overall verdict fails:
+    fal verifies key credentials before account state (proven 24 Sep — wrong
+    secret 401s, valid key on a locked account 403s), so an account-lockout
+    body on 403/402 means the key is GOOD and the remedy is billing, not
+    re-pasting. reason stays in {"auth_rejected", "account_locked",
+    "unreachable"}.
+    """
+    authenticated = False
+    try:
+        if provider == "fal":
+            # fal's queue status endpoint only answers POST (GET is 405 for
+            # everyone). A valid key passes auth and reaches the 404
+            # "request not found"; an invalid key is bounced 401/403 first.
+            # The nil UUID never exists: nothing is enqueued or charged.
+            response = _probe_post(
+                f"https://queue.fal.run/fal-ai/flux/schnell/requests/{_PROBE_REQUEST_ID}/status",
+                headers={"Authorization": f"Key {key}"},
+            )
+        else:
+            instances = Settings().NINEROUTER_INSTANCES
+            if not instances:
+                return (False, "unreachable", False)
+            origin = next(iter(instances.values())).rstrip("/")
+            response = _probe_get(
+                f"{origin}/v1/models",
+                headers={"Authorization": f"Bearer {key}"},
+            )
+    except (httpx.TimeoutException, httpx.TransportError, OSError):
+        return (False, "unreachable", False)
+    if response.status_code == 404 and provider == "fal":
+        return (True, None, True)
+    if provider == "9router" and response.status_code == 200:
+        return (True, None, True)
+    if response.status_code == 401:
+        return (False, "auth_rejected", False)
+    if response.status_code in (402, 403):
+        # Read the upstream body before blaming the key: lock/balance wording
+        # names ACCOUNT state (key already authenticated), anything else on
+        # 403 is treated as an auth/permission rejection, fail-closed.
+        detail = ""
+        try:
+            parsed = response.json()
+            if isinstance(parsed, dict):
+                detail_value = parsed.get("detail")
+                if isinstance(detail_value, str):
+                    detail = detail_value
+        except ValueError:
+            detail = response.text[:500]
+        lowered = detail.lower()
+        account_markers = ("locked", "balance", "credit", "quota")
+        authenticated = any(marker in lowered for marker in account_markers)
+        if response.status_code == 402 or authenticated:
+            return (False, "account_locked", True)
+        # A reachable 403 without lock/balance wording is a permission-class
+        # rejection, not a network problem: fail closed to auth_rejected.
+        return (False, "auth_rejected", False)
+    return (False, "unreachable", False)
+
+
+@app.get("/api/v1/settings/providers/{provider}/validate")
+def validate_provider_key(provider: str) -> JSONResponse:
+    """Prove the stored key is valid at the real provider — not merely present."""
+    if provider not in _SETTINGS_PROVIDERS:
+        raise HTTPException(status_code=404, detail="unknown provider")
+    current_settings = Settings()
+    key = ProviderKeyStore(current_settings).get(provider)
+    if key is None:
+        raise HTTPException(status_code=409, detail="no key stored for this provider")
+    ok, reason, authenticated = _probe_provider_auth(provider, key)
+    body: dict[str, object] = {"ok": ok, "provider": provider, "probe": "provider_auth"}
+    if reason is not None:
+        body["reason"] = reason
+    if not ok:
+        # Positive evidence only rides failed verdicts: did the KEY itself
+        # authenticate upstream even though the overall answer is no?
+        body["authenticated"] = authenticated
+    return JSONResponse(content=body)
+
+
+class BrainstormRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    instance_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+    topic: str = Field(min_length=1, max_length=500)
+    content_type: Literal["photo", "illustration", "vector"]
+    model_id: str = Field(min_length=1, max_length=200)
+
+
+class _BrainstormTransport:
+    def __init__(self, body: dict[str, object]) -> None:
+        self.body = body
+
+    def request(self, operation: str, payload: dict[str, object]) -> dict[str, object]:
+        return self.body
+
+
+class MetadataRequest(BaseModel):
+    """Bounded metadata request; a suggestion never confirms a submission."""
+
+    model_config = ConfigDict(extra="forbid")
+    instance_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+    topic: str = Field(min_length=1, max_length=500)
+    content_type: Literal["photo", "illustration", "vector"]
+    model_id: str = Field(min_length=1, max_length=200)
+
+
+@app.post("/api/v1/creative/assistant/brainstorm")
+def brainstorm_creative_brief(payload: BrainstormRequest, request: Request) -> JSONResponse:
+    """One bounded, schema-validated 9Router brainstorm operation."""
+    current_settings = Settings()
+    require_owned_session(request, current_settings)
+    origins = current_settings.ninerouter_instance_origins()
+    origin = origins.get(payload.instance_id)
+    if origin is None:
+        raise HTTPException(status_code=404, detail="selected 9Router instance is unavailable")
+    instance_id = payload.instance_id
+    try:
+        validate_9router_base_url(origin)
+    except ValueError:
+        raise HTTPException(status_code=503, detail="9Router assistant origin is invalid") from None
+    key = ProviderKeyStore(current_settings).get(
+        "9router"
+    ) or current_settings.ninerouter_instance_api_key(instance_id)
+    if not key:
+        raise HTTPException(status_code=503, detail="9Router assistant credential is unavailable")
+    try:
+        response = httpx.post(
+            f"{origin.rstrip('/')}/chat/completions",
+            headers={"Authorization": f"Bearer {key}"},
+            json={
+                "model": payload.model_id,
+                "stream": False,
+                "response_format": {"type": "json_object"},
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "brainstorm: return JSON with exactly three distinct "
+                            "questions and one recommendation."
+                        ),
+                    },
+                    {"role": "user", "content": payload.model_dump_json()},
+                ],
+            },
+            timeout=30.0,
+            follow_redirects=False,
+        )
+        response.raise_for_status()
+        upstream = response.json()
+        response_model = upstream.get("model")
+        content = upstream["choices"][0]["message"]["content"]
+        body = json.loads(content)
+        if not isinstance(body, dict) or not isinstance(response_model, str):
+            raise ValueError("invalid assistant body")
+        body["model"] = response_model
+        result = assistant_adapter.brainstorm(_BrainstormTransport(body), payload.model_dump())
+    except (
+        httpx.HTTPError,
+        KeyError,
+        IndexError,
+        TypeError,
+        ValueError,
+        assistant_adapter.AssistantError,
+    ):
+        raise HTTPException(
+            status_code=502, detail="9Router assistant response was unavailable or invalid"
+        ) from None
+    return JSONResponse(content=asdict(result))
+
+
+@app.post("/api/v1/creative/assistant/metadata")
+def suggest_creative_metadata(payload: MetadataRequest, request: Request) -> JSONResponse:
+    """One bounded, schema-validated 9Router metadata suggestion."""
+    current_settings = Settings()
+    require_owned_session(request, current_settings)
+    origin = current_settings.ninerouter_instance_origins().get(payload.instance_id)
+    if origin is None:
+        raise HTTPException(status_code=404, detail="selected 9Router instance is unavailable")
+    try:
+        validate_9router_base_url(origin)
+    except ValueError:
+        raise HTTPException(status_code=503, detail="9Router assistant origin is invalid") from None
+    key = ProviderKeyStore(current_settings).get("9router") or (
+        current_settings.ninerouter_instance_api_key(payload.instance_id)
+    )
+    if not key:
+        raise HTTPException(status_code=503, detail="9Router assistant credential is unavailable")
+    try:
+        response = httpx.post(
+            f"{origin.rstrip('/')}/chat/completions",
+            headers={"Authorization": f"Bearer {key}"},
+            json={
+                "model": payload.model_id,
+                "stream": False,
+                "response_format": {"type": "json_object"},
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "suggest_metadata: return JSON with title, keywords array, "
+                            "and release_group."
+                        ),
+                    },
+                    {"role": "user", "content": payload.model_dump_json()},
+                ],
+            },
+            timeout=30.0,
+            follow_redirects=False,
+        )
+        response.raise_for_status()
+        upstream = response.json()
+        model = upstream.get("model")
+        body = json.loads(upstream["choices"][0]["message"]["content"])
+        if not isinstance(body, dict) or not isinstance(model, str):
+            raise ValueError("invalid assistant body")
+        body["model"] = model
+        result = assistant_adapter.suggest_metadata(
+            _BrainstormTransport(body), payload.model_dump()
+        )
+    except (
+        httpx.HTTPError,
+        KeyError,
+        IndexError,
+        TypeError,
+        ValueError,
+        assistant_adapter.AssistantError,
+    ):
+        raise HTTPException(
+            status_code=502,
+            detail="9Router assistant response was unavailable or invalid",
+        ) from None
+    return JSONResponse(content=asdict(result))
+
+
+@app.get("/api/v1/creative/bootstrap")
+def bootstrap_creative_session(request: Request) -> JSONResponse:
+    """Issue an opaque browser ownership cookie without persisting project data server-side."""
+    current_settings = Settings()
+    existing = session_id_from_token(
+        request.cookies.get(SESSION_COOKIE_NAME), current_settings.SESSION_SECRET
+    )
+    response = JSONResponse(content={"session_ready": True})
+    if existing is None:
+        set_session_cookie(
+            response,
+            str(uuid.uuid4()),
+            secret=current_settings.SESSION_SECRET,
+            secure=current_settings.SECURE_COOKIES,
+        )
+    return response
+
+
+@app.post("/api/v1/creative/jobs", status_code=status.HTTP_201_CREATED)
+def enqueue_creative_job(payload: CreativeJobRequest, request: Request) -> JSONResponse:
+    """Revalidate an approved local snapshot and enqueue one owned image-generation job."""
+    current_settings = Settings()
+    owner = require_owned_session(request, current_settings)
+    job = enqueue_browser_job(payload, owner_session_id=owner, settings=current_settings)
+    view = public_job_view(job, current_settings.ARTIFACT_RETENTION_HOURS)
+    return JSONResponse(status_code=status.HTTP_201_CREATED, content=view)
+
+
+@app.get("/api/v1/creative/jobs/{job_id}")
+def read_creative_job(job_id: str, request: Request) -> JSONResponse:
+    """Read whitelisted progress for the caller's own job only."""
+    current_settings = Settings()
+    owner = require_owned_session(request, current_settings)
+    job = get_owned_job(job_id, owner_session_id=owner, settings=current_settings)
+    # Issue #26 AC: queue position disclosed while the job waits in the queue.
+    position = QueueStore(create_sqlite_engine(current_settings)).queued_position(job_id)
+    return JSONResponse(
+        content=public_job_view(
+            job,
+            current_settings.ARTIFACT_RETENTION_HOURS,
+            queue_position=position,
+        )
+    )
+
+
+@app.delete("/api/v1/creative/jobs/{job_id}")
+def cancel_creative_job(job_id: str, request: Request) -> JSONResponse:
+    """Request cancellation; worker decides the safe terminal outcome."""
+    current_settings = Settings()
+    owner = require_owned_session(request, current_settings)
+    job = request_owned_cancel(job_id, owner_session_id=owner, settings=current_settings)
+    return JSONResponse(content=public_job_view(job, current_settings.ARTIFACT_RETENTION_HOURS))
 
 
 async def read_limited_request_body(

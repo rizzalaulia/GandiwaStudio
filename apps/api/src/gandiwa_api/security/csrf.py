@@ -114,8 +114,16 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
         exempt_paths: set[str] | None = None,
     ) -> None:
         super().__init__(app)
-        self.settings = settings or Settings()
+        # Live read, not an import-time snapshot: tests (and uvicorn
+        # --reload) re-read SESSION_SECRET from the env per request;
+        # a frozen Settings() here makes tokens signed with the live
+        # secret fail verification (403 cascades across the suite).
+        self._frozen_settings = settings
         self.exempt_paths = exempt_paths or set()
+
+    @property
+    def settings(self) -> Settings:
+        return self._frozen_settings or Settings()
 
     async def dispatch(self, request: Request, call_next: Callable[..., Any]) -> Response:
         normalized_path = request.url.path.rstrip("/") or "/"
@@ -127,7 +135,11 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
             return await call_next(request)  # type: ignore[no-any-return]
 
         # Check for CSRF header and cookie on state-changing methods
-        csrf_header = request.headers.get(CSRF_HEADER_NAME)
+        # Issue #26 slice 2: the Settings UI ships the token as
+        # X-Companion-Token; honour it as an exact alias of X-CSRF-Token.
+        csrf_header = request.headers.get(CSRF_HEADER_NAME) or request.headers.get(
+            "x-companion-token"
+        )
         csrf_cookie = request.cookies.get(CSRF_COOKIE_NAME)
 
         if not csrf_header or not csrf_cookie:

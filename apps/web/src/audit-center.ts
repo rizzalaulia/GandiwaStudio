@@ -43,7 +43,7 @@ export function verdictForFinding(ruleId: string, reportVerdict: 'pass' | 'warni
   if (reportVerdict === 'pass') return 'PASS'
   const rule = RULES_BY_ID.get(ruleId)
   if (!rule) throw new Error(`Audit finding references unknown rule: ${ruleId}`)
-  return reportVerdict === 'fail' && !rule.blocks_export ? 'WARNING' : reportVerdict === 'warning' ? 'WARNING' : 'FAIL'
+  return rule.blocks_export ? 'FAIL' : 'WARNING'
 }
 
 const REMEDIATIONS: Record<string, string> = {

@@ -43,6 +43,9 @@ var/
 # Hermes local handoff
 .hermes-gandiwa-studio-2-handoff.md
 
+# Local preservation archives. Keep them out of commits until explicitly requested.
+backups/
+
 # IDE / OS
 .DS_Store
 Thumbs.db
@@ -50,3 +53,10 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 !.vscode/settings.json
+
+# vitest json reporter output
+apps/web/.vitest/
+
+# Retired React-shell build; canonical frontend is apps/web/rev3-accepted/.
+apps/web/dist-gandiwa-studio/
+apps/web/legacy-frontend/

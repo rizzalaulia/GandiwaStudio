@@ -1,0 +1,1082 @@
+/* Issue #26 (opsi B, layout studio 22 Sep) — Beranda = meja kerja studio.
+   Hero: kanvas besar di tengah. Prompt ramping di kiri, Title & Keywords di
+   kanan, kandidat menempel di bawah kanvas, status jadi chip di header.
+   Reuses repo :root tokens; artwork never sits on a dark surface. */
+
+.beranda {
+  box-sizing: border-box;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--canvas);
+  color: var(--text);
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 24px 28px 28px;
+}
+
+.beranda-desk {
+  flex: 1 0 auto;
+}
+
+.beranda-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 20px;
+}
+
+.beranda-header-title {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.beranda-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.beranda-icon-button {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  padding: 0;
+  font-size: 1.05rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.beranda-icon-button:hover {
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+
+.beranda-icon-button:focus-visible {
+  outline: 3px solid #1d4ed8;
+  outline-offset: 2px;
+}
+
+.beranda-night .beranda-icon-button:focus-visible {
+  outline-color: #f8c77d;
+}
+
+.beranda-header h1 {
+  margin: 0;
+  font-size: 1.35rem;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.beranda-subtitle {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.beranda-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex: 1;
+  justify-content: center;
+}
+
+.beranda-chip {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+.beranda-chip-ok {
+  background: var(--success-soft);
+  border-color: var(--success);
+  color: var(--success);
+}
+
+/* --- meja tiga kolom: kiri prompt, tengah kanvas hero, kanan metadata --- */
+
+/* Rev3 workflow: Create / Prepare. Memakai token studio yang sudah ada. */
+.beranda-workflow-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.beranda-workflow-tab {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--muted);
+  border-radius: 9px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.beranda-workflow-tab span { display: block; font-size: .72rem; font-weight: 400; margin-top: 2px; }
+.beranda-workflow-tab[aria-current='page'] { color: #fff; background: var(--primary, #18212F); border-color: var(--primary, #18212F); }
+.beranda-workflow-tab:disabled { opacity: .45; cursor: not-allowed; }
+.beranda-workflow-hint { margin: 0 0 0 auto; color: var(--muted); font-size: .86rem; }
+
+.beranda-prepare { display: grid; grid-template-columns: 260px minmax(0, 1fr) 340px; gap: 18px; align-items: start; }
+.beranda-prepare > * { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+.beranda[data-page='create'] .beranda-side-right { display: none; }
+/* Rev3 (arah Master 25 Sep): hasil generate adalah panggung besar di KIRI, panel prompt kecil di KANAN. */
+.beranda[data-page='create'] .beranda-desk { grid-template-columns: minmax(0, 1fr) 300px; }
+.beranda[data-page='create'] .beranda-canvas { order: -1; }
+.beranda-prepare h2 { margin: 0 0 12px; font-size: 1rem; }
+.beranda-prepare-audit ul { padding-left: 18px; margin: 0 0 14px; display: grid; gap: 10px; }
+.beranda-prepare-audit p { color: var(--muted); font-size: .85rem; line-height: 1.5; }
+.beranda-prepare-master .beranda-stage { min-height: 520px; }
+.beranda-metadata-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 14px; }
+.beranda-metadata-actions .beranda-toolbar-button { padding: 7px 9px; font-size: .8rem; }
+.beranda-review { display: flex; align-items: flex-start; gap: 8px; margin: 14px 0; color: var(--text); font-size: .87rem; line-height: 1.4; }
+.beranda-download-ready { width: 100%; }
+
+.beranda-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 0 0 18px;
+}
+
+.beranda-toolbar-button {
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 9px 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.beranda-toolbar-button:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+.beranda-toolbar-message {
+  color: var(--muted);
+  font-size: .9rem;
+}
+
+.beranda-desk {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr) 300px;
+  gap: 18px;
+  align-items: start;
+}
+
+.beranda-side {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 18px;
+}
+
+.beranda-side h2 {
+  margin: 0 0 12px;
+  font-size: 1rem;
+  letter-spacing: 0.01em;
+}
+
+.beranda-canvas {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.beranda-stage {
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 16px;
+  min-height: 560px;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  overflow: auto;
+}
+
+.beranda-stage[data-inspection-background='light'] { background: #f3f0e8; }
+.beranda-stage[data-inspection-background='dark'] { background: #20242a; }
+.beranda-stage[data-inspection-background='checker'] {
+  background-color: #ececec;
+  background-image:
+    linear-gradient(45deg, #c9c9c9 25%, transparent 25%),
+    linear-gradient(-45deg, #c9c9c9 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #c9c9c9 75%),
+    linear-gradient(-45deg, transparent 75%, #c9c9c9 75%);
+  background-size: 24px 24px;
+  background-position: 0 0, 0 12px, 12px -12px, -12px 0;
+}
+
+.beranda-stage-art {
+  max-width: none;
+  transform-origin: center;
+}
+
+.beranda-inspection-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.beranda-inspection-controls label,
+.beranda-inspection-controls [role='group'] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.beranda-inspection-controls button {
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 5px 10px;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.beranda-inspection-controls button[aria-pressed='true'] {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.beranda-stage-empty {
+  color: var(--subtle);
+  text-align: center;
+  max-width: 320px;
+  line-height: 1.6;
+}
+
+.beranda-pixels {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  margin: 0;
+  text-align: center;
+}
+
+.beranda-kandidat {
+  background: var(--surface);
+  border: 1px dashed var(--line-strong);
+  border-radius: 12px;
+  padding: 14px 18px;
+  color: var(--muted);
+}
+
+.beranda-kandidat p {
+  margin: 0;
+}
+
+/* Strip riwayat revisi (kandidat = compare antar-revision, #26). */
+.beranda-kandidat-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.beranda-kandidat-strip button {
+  background: var(--surface-strong, var(--surface));
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 6px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  display: grid;
+  gap: 6px;
+  width: 112px;
+  text-align: left;
+}
+
+.beranda-kandidat-thumb,
+.beranda-kandidat-placeholder {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 5px;
+  object-fit: cover;
+  background: var(--surface);
+}
+
+.beranda-kandidat-placeholder {
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--line-strong);
+  color: var(--subtle);
+  font-size: 0.7rem;
+  text-align: center;
+}
+
+.beranda-kandidat-strip button[aria-selected='true'] {
+  border-color: var(--accent, var(--line-strong));
+  color: var(--ink, var(--muted));
+  background: var(--accent-soft, var(--surface));
+}
+
+.beranda-kandidat-strip button[data-master='true']::after {
+  content: ' · MASTER';
+  color: var(--accent);
+  font-size: 0.72em;
+}
+
+.beranda-master-selection {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.beranda-master-selection p { margin: 0; }
+
+.beranda-field {
+  display: block;
+  margin-bottom: 12px;
+}
+
+.beranda-field > span {
+  display: block;
+  font-weight: 600;
+  font-size: 0.85rem;
+  margin-bottom: 5px;
+}
+
+.beranda-field textarea,
+.beranda-field input,
+.beranda-field select {
+  width: 100%;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  padding: 8px 10px;
+  background: var(--beranda-field-bg, #ffffff);
+  color: var(--text);
+}
+
+.beranda-field-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.beranda-note {
+  color: var(--muted);
+  margin: 8px 0 0;
+}
+
+/* Status bukan lagi beban Header: ia menjadi kartu pulse kecil di bawah
+   metadata, mudah dibaca tanpa menggeser fokus kanvas. */
+.beranda-system-pulse {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.beranda-system-pulse-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: var(--muted);
+  font-size: .78rem;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.beranda-system-pulse-note {
+  color: var(--success);
+  font-size: .7rem;
+}
+
+.beranda-system-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  margin-top: 9px;
+}
+
+.beranda-system-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-muted);
+}
+
+.beranda-system-item b {
+  font-size: .76rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.beranda-system-item small {
+  color: var(--muted);
+  font-size: .72rem;
+  white-space: nowrap;
+}
+
+.beranda-system-ok,
+.beranda-system-ok small,
+.beranda-system-ok b,
+.beranda-system-ok.beranda-system-ok {
+  color: var(--success);
+}
+
+.beranda-system-ok {
+  background: var(--success-soft);
+  border-color: #a8d5b5;
+}
+
+.beranda-primary {
+  background: var(--accent);
+  color: #ffffff;
+  border: none;
+  border-radius: 10px;
+  padding: 9px 18px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.beranda-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.beranda-primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.beranda-submit {
+  width: 100%;
+  margin-top: 4px;
+}
+
+/* --- mode malam: dinding UI berubah, kanvas artwork TIDAK (netral terang) --- */
+
+/* Kelas pada <html> adalah sabuk pengaman: kalau shell global punya surface
+   sendiri, seluruh viewport tetap malam dan tidak menyisakan pita putih. */
+html.gandiwa-night,
+html.gandiwa-night body,
+html.gandiwa-night #root {
+  background: #0d1117;
+  color-scheme: dark;
+}
+
+.beranda-night {
+  --beranda-field-bg: #10161f;
+  background: #0d1117;
+  color: #e6ebf4;
+  color-scheme: dark;
+}
+
+.beranda-night .beranda-header {
+  border-bottom-color: #263548;
+}
+
+/* Semua permukaan meja wajib gelap di night mode. Selector spesifik ini
+   sengaja mengunci kolom prompt (kiri) dan metadata (kanan): jangan sampai
+   mewarisi --surface putih dari shell global. */
+.beranda-night .beranda-side,
+.beranda-night .beranda-side-left,
+.beranda-night .beranda-side-right,
+.beranda-night .beranda-kandidat {
+  background-color: #131a24;
+  border-color: #263548;
+  color: #e6ebf4;
+}
+
+.beranda-night .beranda-side h2,
+.beranda-night .beranda-field > span {
+  color: #cbd5e4;
+}
+
+.beranda-night .beranda-field textarea,
+.beranda-night .beranda-field input,
+.beranda-night .beranda-field select {
+  border-color: #33445c;
+  color: #e6ebf4;
+}
+
+.beranda-night .beranda-chip,
+.beranda-night .beranda-toolbar-button {
+  background: #131a24;
+  border-color: #33445c;
+  color: #cbd5e4;
+}
+
+.beranda-night .beranda-chip-ok {
+  background: #12271b;
+  border-color: #2f6b45;
+  color: #7fd6a2;
+}
+
+.beranda-night .beranda-pixels,
+.beranda-night .beranda-subtitle,
+.beranda-night .beranda-note,
+.beranda-night .beranda-kandidat p,
+.beranda-night .beranda-system-pulse-head,
+.beranda-night .beranda-system-item small {
+  color: #94a3b8;
+}
+
+.beranda-night .beranda-system-pulse {
+  border-top-color: #263548;
+}
+
+.beranda-night .beranda-system-item {
+  background: #10161f;
+  border-color: #33445c;
+  color: #d9e2f0;
+}
+
+.beranda-night .beranda-system-ok {
+  background: #12271b;
+  border-color: #2f6b45;
+  color: #7fd6a2;
+}
+
+.beranda-night .beranda-system-ok small,
+.beranda-night .beranda-system-ok b,
+.beranda-night .beranda-system-pulse-note {
+  color: #7fd6a2;
+}
+
+.beranda-night .beranda-theme-toggle {
+  background: #1a2331;
+  border-color: #3a4c66;
+}
+
+.beranda-stage {
+  /* Panggung ikut ruangan selama kosong; latar netral terang hanya saat
+     art ada (class beranda-stage-loaded) — gembok color cast tetap tegak. */
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+}
+
+.beranda-stage-loaded {
+  background: var(--surface);
+}
+
+.beranda-night .beranda-stage {
+  background: #131a24;
+  border-color: #33445c;
+}
+
+.beranda-night .beranda-stage-loaded {
+  /* Gembok artwork: gambar TETAP di atas latar netral terang, bukan gelap. */
+  background: #f5f6f8;
+  border-color: #c4ccd8;
+}
+
+.beranda-night .beranda-stage-empty {
+  color: #8fa0b5;
+}
+
+.beranda-theme-toggle {
+  cursor: pointer;
+}
+
+/* --- dialog Setelan (bahasa & API key) --- */
+
+.beranda-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 22, 33, 0.55);
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  z-index: 60;
+}
+
+.beranda-dialog {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--line-strong);
+  border-radius: 16px;
+  width: min(560px, 100%);
+  max-height: min(80vh, 720px);
+  overflow: auto;
+  padding: 20px 24px 24px;
+}
+
+.beranda-dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.beranda-dialog-head h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.beranda-dialog-section {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 16px 16px;
+  margin: 14px 0 0;
+}
+
+.beranda-dialog-section legend {
+  font-weight: 700;
+  padding: 0 6px;
+}
+
+.beranda-radio {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.beranda-keyrow {
+  border-top: 1px dashed var(--line);
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
+.beranda-keyrow-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.beranda-night .beranda-dialog {
+  background: #131a24;
+  border-color: #33445c;
+}
+
+.beranda-night .beranda-dialog-section {
+  border-color: #263548;
+}
+
+.beranda-theme-toggle:hover {
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+
+.beranda-disclaimer {
+  margin-top: auto;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface) 90%, var(--accent));
+  color: var(--muted);
+  font-size: .84rem;
+  line-height: 1.55;
+}
+
+.beranda-disclaimer strong {
+  color: var(--text);
+}
+
+.beranda-disclaimer p {
+  margin: 4px 0 0;
+}
+
+.beranda-footer {
+  margin-top: 14px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: .9rem;
+  text-align: center;
+}
+
+.beranda-footer a {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.beranda-night .beranda-disclaimer {
+  background: #182231;
+  border-color: #33445c;
+  border-left-color: #f0b16b;
+  color: #aab9cb;
+}
+
+.beranda-night .beranda-disclaimer strong {
+  color: #e5edf8;
+}
+
+.beranda-night .beranda-footer {
+  border-top-color: #263548;
+  color: #94a3b8;
+}
+
+.beranda-night .beranda-footer a {
+  color: #f0b16b;
+}
+
+/* layar sempit: kanvas tetap panggung utama, panel jajar di bawahnya */
+@media (max-width: 1100px) {
+  .beranda-prepare { grid-template-columns: 1fr; }
+  .beranda-workflow-nav { align-items: stretch; flex-wrap: wrap; }
+  .beranda-workflow-hint { width: 100%; margin-left: 0; }
+  .beranda-desk {
+    grid-template-columns: 1fr;
+  }
+
+  .beranda-side-left {
+    order: 2;
+  }
+
+  .beranda-canvas {
+    order: 1;
+  }
+
+  .beranda-side-right {
+    order: 3;
+  }
+}
+
+/* Tombol Tes API: jahitan eksklusif untuk probe autentikasi provider.
+   Ghost studio — garis amber tipis, ikon level hasil di kiri. */
+.beranda-keyrow-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.beranda-btn-test {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border: 1px solid var(--accent, #d97706);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--accent, #d97706);
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, transform 140ms ease;
+}
+
+.beranda-btn-test:hover:not(:disabled) {
+  background: var(--accent, #d97706);
+  color: var(--surface, #0b1220);
+  transform: translateY(-1px);
+}
+
+.beranda-btn-test:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.beranda-btn-test-icon {
+  font-size: 0.9rem;
+  line-height: 1;
+}
+
+/* Level hasil tes menewaskan warna tombol & catatannya */
+.beranda-keytest {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 0.83rem;
+  border: 1px solid transparent;
+}
+
+.beranda-keytest-ok {
+  color: #4ade80;
+  border-color: rgba(74, 222, 128, 0.35);
+  background: rgba(74, 222, 128, 0.08);
+}
+
+.beranda-keytest-rejected {
+  color: #f87171;
+  border-color: rgba(248, 113, 113, 0.35);
+  background: rgba(248, 113, 113, 0.08);
+}
+
+.beranda-keytest-account {
+  color: #fb923c;
+  border-color: rgba(251, 146, 60, 0.35);
+  background: rgba(251, 146, 60, 0.08);
+}
+
+.beranda-keytest-unreachable,
+.beranda-keytest-error {
+  color: #facc15;
+  border-color: rgba(250, 204, 21, 0.35);
+  background: rgba(250, 204, 21, 0.08);
+}
+
+/* Ikon pada tombol ikut level */
+.beranda-btn-test.beranda-keytest-ok {
+  color: #4ade80;
+  border-color: rgba(74, 222, 128, 0.5);
+}
+
+.beranda-btn-test.beranda-keytest-rejected {
+  color: #f87171;
+  border-color: rgba(248, 113, 113, 0.5);
+}
+
+.beranda-btn-test.beranda-keytest-account {
+  color: #fb923c;
+  border-color: rgba(251, 146, 60, 0.5);
+}
+
+.beranda-btn-test.beranda-keytest-unreachable,
+.beranda-btn-test.beranda-keytest-error {
+  color: #facc15;
+  border-color: rgba(250, 204, 21, 0.5);
+}
+
+
+/* Night tak boleh menelan tulisan dialog: legend, radio label, catatan,
+   dan kepala role diberi warna terang eksplisit atas permukaan #131a24. */
+.beranda-night .beranda-dialog h2,
+.beranda-night .beranda-dialog-section legend,
+.beranda-night .beranda-api-role-head strong,
+.beranda-night .beranda-api-role-head span,
+.beranda-night .beranda-keyrow-head strong,
+.beranda-night .beranda-note,
+.beranda-night .beranda-keynote {
+  color: #e6ebf4;
+}
+
+.beranda-night .beranda-note,
+.beranda-night .beranda-keytest {
+  color: #cbd5e4;
+}
+
+.beranda-night .beranda-keytest-ok {
+  color: #4ade80;
+}
+
+.beranda-night .beranda-keytest-rejected {
+  color: #f87171;
+}
+
+.beranda-night .beranda-keytest-account {
+  color: #fb923c;
+}
+
+.beranda-night .beranda-keytest-unreachable,
+.beranda-night .beranda-keytest-error {
+  color: #facc15;
+}
+
+.beranda-night .beranda-btn-test {
+  color: #f59e0b;
+  border-color: rgba(245, 158, 11, 0.6);
+}
+
+.beranda-night .beranda-btn-test:hover:not(:disabled) {
+  background: #f59e0b;
+  color: #131a24;
+}
+
+.beranda-night .beranda-radio > span {
+  color: #e6ebf4;
+}
+
+
+/* Jalur A (#26): baris aksi dispatch — tombol Setujui + Batalkan berdampingan */
+.beranda-dispatch-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.beranda-cancel-job {
+  border-color: rgba(248, 113, 113, 0.55);
+  color: #f87171;
+}
+
+.beranda-cancel-job:hover:not(:disabled) {
+  background: rgba(248, 113, 113, 0.9);
+  border-color: #f87171;
+  color: #131a24;
+}
+
+.beranda-night .beranda-cancel-job {
+  color: #f87171;
+}
+
+/* --- Setelan: hallmark ledger dua zona (24 Sep, Varian A) ---
+   Hallmark · macrostructure: Workbench (ledger dua zona) · genre: modern-minimal
+   design-system: docs/DESIGN.md (managed) · designed-as-app
+   Zona kiri mast arang (judul, tujuan, status hidup provider); kanan ledger
+   terang dengan semua pilihan terlihat sekaligus — tanpa tab. */
+.beranda-settings-desk {
+  width: min(780px, 100%);
+  padding: 0;
+  display: grid;
+  grid-template-columns: 248px minmax(0, 1fr);
+}
+
+.beranda-settings-mast {
+  background: #18212f;
+  color: #e5edf8;
+  padding: 20px 20px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.beranda-settings-mast-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.beranda-settings-mast-head h2 {
+  margin: 0;
+  font-size: 1.15rem;
+  letter-spacing: -0.01em;
+  color: #f4f7fc;
+}
+
+.beranda-settings-purpose {
+  margin: 0;
+  color: #aab9cb;
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+
+.beranda-settings-live {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.beranda-settings-live li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8rem;
+  color: #cbd8e8;
+}
+
+.beranda-settings-live b {
+  margin-left: auto;
+  font-weight: 600;
+  color: #e5edf8;
+  text-align: right;
+}
+
+.beranda-settings-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex: none;
+}
+
+.beranda-settings-dot-ok {
+  background: #4ade80;
+}
+
+.beranda-settings-dot-warn {
+  background: #facc15;
+}
+
+.beranda-settings-ledger {
+  padding: 18px 24px 22px;
+  max-height: min(76vh, 680px);
+  overflow: auto;
+}
+
+.beranda-settings-ledger section {
+  padding: 14px 0 18px;
+}
+
+.beranda-settings-ledger section + section {
+  border-top: 1px solid var(--line);
+}
+
+.beranda-settings-ledger h4 {
+  margin: 0 0 12px;
+  font-size: 0.78rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.beranda-night .beranda-settings-desk {
+  background: #131a24;
+}
+
+.beranda-night .beranda-settings-mast {
+  background: #0f1622;
+}
+
+.beranda-night .beranda-settings-purpose,
+.beranda-night .beranda-settings-live li {
+  color: #aab9cb;
+}
+
+.beranda-night .beranda-settings-ledger section + section {
+  border-top-color: #263548;
+}
+
+@media (max-width: 720px) {
+  .beranda {
+    padding: 16px 14px 20px;
+  }
+
+  .beranda-header {
+    align-items: flex-start;
+  }
+
+  .beranda-header-actions {
+    flex: 0 0 auto;
+  }
+
+  .beranda-inspection-controls {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .beranda-inspection-controls [role='group'] {
+    flex-wrap: wrap;
+  }
+
+  .beranda-inspection-controls button {
+    min-height: 44px;
+  }
+
+  .beranda-settings-desk {
+    grid-template-columns: 1fr;
+  }
+
+  .beranda-settings-mast {
+    flex-direction: column;
+  }
+}

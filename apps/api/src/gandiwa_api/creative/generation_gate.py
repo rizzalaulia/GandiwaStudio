@@ -82,9 +82,7 @@ def _check_provider_model_explicit(session: CreativeSession) -> GateCheck:
 
 
 def _check_content_type_and_creation_method(session: CreativeSession) -> GateCheck:
-    ok = bool(session.prompt.content_type.strip()) and bool(
-        session.prompt.creation_method.strip()
-    )
+    ok = bool(session.prompt.content_type.strip()) and bool(session.prompt.creation_method.strip())
     return GateCheck(
         name="content_type_and_creation_method",
         ok=ok,

@@ -30,6 +30,10 @@ describe('verdictForFinding', () => {
   it('keeps non-blocking node-count failures as warnings', () => {
     expect(verdictForFinding('vector.node-count', 'fail')).toBe('WARNING')
   })
+
+  it('turns a blocking submission-format finding into FAIL even when preflight calls it a warning', () => {
+    expect(verdictForFinding('illustration-raster.submission-format', 'warning')).toBe('FAIL')
+  })
 })
 
 describe('buildAuditCenter', () => {
