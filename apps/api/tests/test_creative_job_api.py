@@ -80,6 +80,44 @@ def _approved_payload() -> dict[str, object]:
 
 
 @pytest.mark.anyio
+async def test_creative_job_requires_rules_snapshot_id_and_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = tmp_path / "creative-rules.sqlite3"
+    artifacts = tmp_path / "artifacts-rules"
+    artifacts.mkdir()
+    command.upgrade(_alembic_config(f"sqlite:///{database}"), "head")
+    monkeypatch.setenv("GANDIWA_DATABASE_URL", f"sqlite:///{database}")
+    monkeypatch.setenv("GANDIWA_ARTIFACT_DIR", str(artifacts))
+    base = _payload()
+    payload = {**base, "rules_snapshot": {"id": "adobe-stock-2026-09-08-v1"}}
+    payload["session"] = dict(base["session"])  # type: ignore[assignment]
+    payload["session"]["approved_prompt_digest"] = ""  # type: ignore[index]  # digest irrelevant: shape gate fires first
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.get("/api/v1/creative/bootstrap")
+        csrf = await _csrf(client)
+
+        missing_version = await client.post(
+            "/api/v1/creative/jobs",
+            json=payload,
+            headers={"X-CSRF-Token": csrf},
+        )
+        assert missing_version.status_code == 422
+        assert "version" in missing_version.json()["detail"]
+
+        version_only = {**base, "rules_snapshot": {"version": "adobe-stock-2026-09-08-v1"}}
+        missing_id = await client.post(
+            "/api/v1/creative/jobs",
+            json=version_only,
+            headers={"X-CSRF-Token": csrf},
+        )
+        assert missing_id.status_code == 422
+        assert "id" in missing_id.json()["detail"]
+
+
+@pytest.mark.anyio
 async def test_creative_job_requires_an_owned_session_and_csrf(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

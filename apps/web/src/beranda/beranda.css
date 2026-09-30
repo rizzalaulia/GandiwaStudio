@@ -44,8 +44,9 @@
 .beranda-icon-button {
   display: grid;
   place-items: center;
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
   padding: 0;
   font-size: 1.05rem;
   line-height: 1;
@@ -1046,6 +1047,31 @@ html.gandiwa-night #root {
 }
 
 @media (max-width: 720px) {
+  .beranda {
+    padding: 16px 14px 20px;
+  }
+
+  .beranda-header {
+    align-items: flex-start;
+  }
+
+  .beranda-header-actions {
+    flex: 0 0 auto;
+  }
+
+  .beranda-inspection-controls {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .beranda-inspection-controls [role='group'] {
+    flex-wrap: wrap;
+  }
+
+  .beranda-inspection-controls button {
+    min-height: 44px;
+  }
+
   .beranda-settings-desk {
     grid-template-columns: 1fr;
   }

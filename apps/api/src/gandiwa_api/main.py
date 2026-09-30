@@ -487,6 +487,16 @@ class _BrainstormTransport:
         return self.body
 
 
+class MetadataRequest(BaseModel):
+    """Bounded metadata request; a suggestion never confirms a submission."""
+
+    model_config = ConfigDict(extra="forbid")
+    instance_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+    topic: str = Field(min_length=1, max_length=500)
+    content_type: Literal["photo", "illustration", "vector"]
+    model_id: str = Field(min_length=1, max_length=200)
+
+
 @app.post("/api/v1/creative/assistant/brainstorm")
 def brainstorm_creative_brief(payload: BrainstormRequest, request: Request) -> JSONResponse:
     """One bounded, schema-validated 9Router brainstorm operation."""
@@ -547,6 +557,70 @@ def brainstorm_creative_brief(payload: BrainstormRequest, request: Request) -> J
     ):
         raise HTTPException(
             status_code=502, detail="9Router assistant response was unavailable or invalid"
+        ) from None
+    return JSONResponse(content=asdict(result))
+
+
+@app.post("/api/v1/creative/assistant/metadata")
+def suggest_creative_metadata(payload: MetadataRequest, request: Request) -> JSONResponse:
+    """One bounded, schema-validated 9Router metadata suggestion."""
+    current_settings = Settings()
+    require_owned_session(request, current_settings)
+    origin = current_settings.ninerouter_instance_origins().get(payload.instance_id)
+    if origin is None:
+        raise HTTPException(status_code=404, detail="selected 9Router instance is unavailable")
+    try:
+        validate_9router_base_url(origin)
+    except ValueError:
+        raise HTTPException(status_code=503, detail="9Router assistant origin is invalid") from None
+    key = ProviderKeyStore(current_settings).get("9router") or (
+        current_settings.ninerouter_instance_api_key(payload.instance_id)
+    )
+    if not key:
+        raise HTTPException(status_code=503, detail="9Router assistant credential is unavailable")
+    try:
+        response = httpx.post(
+            f"{origin.rstrip('/')}/chat/completions",
+            headers={"Authorization": f"Bearer {key}"},
+            json={
+                "model": payload.model_id,
+                "stream": False,
+                "response_format": {"type": "json_object"},
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "suggest_metadata: return JSON with title, keywords array, "
+                            "and release_group."
+                        ),
+                    },
+                    {"role": "user", "content": payload.model_dump_json()},
+                ],
+            },
+            timeout=30.0,
+            follow_redirects=False,
+        )
+        response.raise_for_status()
+        upstream = response.json()
+        model = upstream.get("model")
+        body = json.loads(upstream["choices"][0]["message"]["content"])
+        if not isinstance(body, dict) or not isinstance(model, str):
+            raise ValueError("invalid assistant body")
+        body["model"] = model
+        result = assistant_adapter.suggest_metadata(
+            _BrainstormTransport(body), payload.model_dump()
+        )
+    except (
+        httpx.HTTPError,
+        KeyError,
+        IndexError,
+        TypeError,
+        ValueError,
+        assistant_adapter.AssistantError,
+    ):
+        raise HTTPException(
+            status_code=502,
+            detail="9Router assistant response was unavailable or invalid",
         ) from None
     return JSONResponse(content=asdict(result))
 

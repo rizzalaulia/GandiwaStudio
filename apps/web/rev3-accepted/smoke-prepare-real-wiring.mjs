@@ -1,0 +1,10 @@
+import { readFileSync } from 'node:fs';
+const html=readFileSync(new URL('./prepare.html',import.meta.url),'utf8');
+const js=readFileSync(new URL('./rev3-prepare.js',import.meta.url),'utf8');
+const fail=[];const check=(n,v)=>{console.log(`${v?'PASS':'FAIL'} ${n}`);if(!v)fail.push(n)};
+check('P1 dedicated handler only',/<script src="rev3-prepare\.js/.test(html)&&!/setTimeout\(/.test(html));
+check('P2 requires locked owner artifact',/master\?\.artifact/.test(js)&&/artifacts\/.+download/.test(js));
+check('P3 sends real bytes to preflight',/const API='\/api\/v1'/.test(js)&&/\$\{API\}\/raster\/preflight/.test(js)&&/blob\(\)/.test(js));
+check('P4 metadata has an explicit fail-closed path to its schema-validated backend',/assistant\/metadata/.test(js)||/explicit 9Router instance and model/.test(js));
+check('P5 download requires human review and preflight',/metadata-reviewed/.test(js)&&/eligible_for_submission/.test(js));
+if(fail.length)process.exit(1);console.log('5/5 PASS prepare real-wiring');

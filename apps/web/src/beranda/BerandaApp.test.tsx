@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { BerandaApp } from './BerandaApp'
@@ -32,12 +32,18 @@ const creativeAdapter = vi.hoisted(() => ({
   buildApprovedCreativeJob: vi.fn(),
 }))
 
+function requestUrl(input: RequestInfo | URL): string {
+  if (input instanceof URL) return input.href
+  if (typeof input === 'string') return input
+  return input.url
+}
+
 // Runtime endpoints real fetch stubs must serve: the studio fetches both on
 // mount, and the REAL status-client merge maps the routed row id ('mibp')
 // onto the settings id ('9router'). Falls through to the per-test handler.
-const RUNTIME_ENDPOINTS = (fetchFallback: (input: RequestInfo | URL) => Promise<unknown>) =>
-  vi.fn((input: RequestInfo | URL) => {
-    const url = input instanceof URL ? input.href : typeof input === 'string' ? input : input.url
+const RUNTIME_ENDPOINTS = (fetchFallback: (input: RequestInfo | URL, init?: RequestInit) => Promise<unknown>) =>
+  vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = requestUrl(input)
     if (url.endsWith('/api/v1/status')) {
       return Promise.resolve({
         ok: true, status: 200,
@@ -53,7 +59,7 @@ const RUNTIME_ENDPOINTS = (fetchFallback: (input: RequestInfo | URL) => Promise<
         ]),
       })
     }
-    return fetchFallback(input)
+    return fetchFallback(input, init)
   })
 
 const MANIFEST_TEXT = JSON.stringify({
@@ -443,9 +449,9 @@ describe('Beranda — meja kerja studio', () => {
     fireEvent.click(rev2)
     fireEvent.click(screen.getByRole('button', { name: 'Prepare this image' }))
     expect(screen.getByTestId('prepare-master-stage')).toHaveAttribute('data-master-revision', expect.stringMatching(/\/1$/))
-    expect(screen.getByRole('button', { name: 'Download ready — belum tersedia' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Download ready, belum tersedia' })).toBeDisabled()
     fireEvent.click(screen.getByRole('checkbox', { name: /I reviewed the title/ }))
-    expect(screen.getByRole('button', { name: 'Download ready — belum tersedia' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Download ready, belum tersedia' })).toBeDisabled()
 
     firstMount.unmount()
     render(<BerandaApp />)
@@ -861,27 +867,24 @@ describe('Beranda — setelan: bahasa & API key', () => {
     const dialog = screen.getByRole('dialog', { name: 'Setelan' })
     expect(dialog).toBeVisible()
     expect(dialog).toHaveTextContent('Bahasa')
-    expect(dialog).toHaveTextContent('Koneksi purwarupa')
+    expect(dialog).toHaveTextContent('Koneksi backend')
   })
 
-  it('renders the hallmacked settings desk: charcoal mast + light ledger, no tabs', () => {
+  it('renders the hallmacked settings desk with real provider connection controls and no tabs', () => {
     render(<BerandaApp />)
     fireEvent.click(screen.getByRole('button', { name: 'Setelan' }))
     const dialog = screen.getByRole('dialog', { name: 'Setelan' })
-    // Zona kiri: masthead arang dengan judul + status hidup provider.
     const mast = dialog.querySelector('.beranda-settings-mast')
     if (!mast) throw new Error('dialog Setelan tak punya zona mast arang')
     expect(mast).toHaveTextContent('Setelan')
-    const mastLines = mast.querySelectorAll('.beranda-settings-live li')
-    // Min 1: baris Backend selalu ada; baris provider tampil saat registry
-    // provider sampai ke komponen (test lain membuktikan jalurnya).
-    expect(mastLines.length).toBeGreaterThanOrEqual(1)
-    // Zona kanan: ledger terang memuat SEMUA pilihan sekaligus (tanpa tab).
+    expect(mast.querySelectorAll('.beranda-settings-live li').length).toBeGreaterThanOrEqual(1)
     const ledger = dialog.querySelector('.beranda-settings-ledger')
     if (!ledger) throw new Error('dialog Setelan tak punya ledger terang')
     expect(ledger).toHaveTextContent('Bahasa')
-    expect(ledger).toHaveTextContent('Image provider')
-    expect(ledger).toHaveTextContent('Reasoning / metadata provider')
+    expect(ledger).toHaveTextContent('Image generation')
+    expect(ledger).toHaveTextContent('Reasoning, prompt & metadata')
+    expect(screen.getByRole('button', { name: 'Simpan kunci fal.ai' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Check connection 9Router' })).toBeVisible()
     expect(dialog.querySelectorAll('[role="tab"]').length).toBe(0)
   })
 
@@ -907,47 +910,75 @@ describe('Beranda — setelan: bahasa & API key', () => {
     expect(screen.queryByRole('button', { name: 'Buka proyek' })).not.toBeInTheDocument()
   })
 
-  it('offers the rev3 local provider forms without claiming a backend connector', () => {
-    render(<BerandaApp />)
-    fireEvent.click(screen.getByRole('button', { name: 'Setelan' }))
-    expect(screen.getByLabelText('Provider gambar')).toHaveValue('fal')
-    fireEvent.change(screen.getByLabelText('Provider gambar'), { target: { value: 'openai' } })
-    expect(screen.getByLabelText('Nama koneksi gambar')).toBeVisible()
-    expect(screen.getByLabelText('Base URL gambar')).toBeVisible()
-    expect(screen.getByLabelText('Model ID gambar')).toBeVisible()
-    expect(screen.getByLabelText('Provider reasoning dan metadata')).toHaveValue('anthropic')
-  })
-
-  it('keeps each local connection check bound to its own provider fields', () => {
-    render(<BerandaApp />)
-    fireEvent.click(screen.getByRole('button', { name: 'Setelan' }))
-    fireEvent.change(screen.getByLabelText('Provider gambar'), { target: { value: 'self' } })
-    const [imageCheck, reasoningCheck] = screen.getAllByRole('button', { name: /Check connection/ })
-    expect(imageCheck).toBeDisabled()
-    expect(reasoningCheck).toBeDisabled()
-    fireEvent.change(screen.getByLabelText('Base URL gambar'), { target: { value: 'https://example.test/v1' } })
-    fireEvent.change(screen.getByLabelText('Model ID gambar'), { target: { value: 'image-1' } })
-    expect(imageCheck).toBeEnabled()
-    expect(reasoningCheck).toBeDisabled()
-  })
-
-
-  it('Check connection rev3 only validates the filled local form and never calls a provider endpoint', async () => {
-    const fetchMock = RUNTIME_ENDPOINTS(vi.fn(() => Promise.reject(new Error('provider must not be called'))))
+  it('uses stored key state from Settings when runtime registry has no 9Router instance', async () => {
+    const fetchMock = RUNTIME_ENDPOINTS(vi.fn((input: RequestInfo | URL) => {
+      const url = requestUrl(input)
+      if (url.endsWith('/api/v1/settings/providers')) {
+        return Promise.resolve(new Response(JSON.stringify([
+          { provider: 'fal', configured: true },
+          { provider: '9router', configured: true },
+        ]), { status: 200 }))
+      }
+      return Promise.reject(new Error(`unexpected request: ${url}`))
+    }))
     vi.stubGlobal('fetch', fetchMock)
     render(<BerandaApp />)
     fireEvent.click(screen.getByRole('button', { name: 'Setelan' }))
-    fireEvent.change(screen.getByLabelText('Kunci baru fal.ai'), { target: { value: 'local-form-value' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Check connection fal.ai' }))
-    const dialog = screen.getByRole('dialog', { name: 'Setelan' })
-    await waitFor(() => expect(within(dialog).getByRole('status')).toHaveTextContent(/valid secara lokal/i))
-    expect(fetchMock.mock.calls.some((call) => typeof call[0] === 'string' && call[0].includes('/validate'))).toBe(false)
+    expect(screen.getByLabelText('Kunci baru fal.ai')).toBeVisible()
+    expect(screen.getByLabelText('Kunci baru 9Router')).toBeVisible()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Check connection 9Router' })).toBeEnabled())
+    expect(fetchMock.mock.calls.some(([request]) => requestUrl(request).endsWith('/api/v1/settings/providers'))).toBe(true)
   })
 
-  it('Check connection stays disabled until the local key form is filled', () => {
+  it('saves a fal key through CSRF and reports the backend validation verdict', async () => {
+    const fetchMock = RUNTIME_ENDPOINTS(vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = requestUrl(input)
+      if (url.endsWith('/api/v1/auth/csrf')) return Promise.resolve(new Response(JSON.stringify({ csrf_token: 'csrf-settings' }), { status: 200 }))
+      if (url.endsWith('/api/v1/settings/providers') && init?.method === 'POST') return Promise.resolve(new Response(JSON.stringify({ saved: ['fal'] }), { status: 200 }))
+      if (url.endsWith('/api/v1/settings/providers')) return Promise.resolve(new Response(JSON.stringify([{ provider: 'fal', configured: true }, { provider: '9router', configured: false }]), { status: 200 }))
+      if (url.endsWith('/api/v1/settings/providers/fal/validate')) return Promise.resolve(new Response(JSON.stringify({ ok: false, provider: 'fal', reason: 'account_locked', authenticated: true }), { status: 200 }))
+      return Promise.reject(new Error(`unexpected request: ${url}`))
+    }))
+    vi.stubGlobal('fetch', fetchMock)
     render(<BerandaApp />)
     fireEvent.click(screen.getByRole('button', { name: 'Setelan' }))
-    expect(screen.getByRole('button', { name: 'Check connection fal.ai' })).toBeDisabled()
+    fireEvent.change(screen.getByLabelText('Kunci baru fal.ai'), { target: { value: 'fal-live-key' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Simpan kunci fal.ai' }))
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Status koneksi fal.ai' })).toHaveTextContent(/tersimpan/i))
+    fireEvent.click(screen.getByRole('button', { name: 'Check connection fal.ai' }))
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Status koneksi fal.ai' })).toHaveTextContent(/akun provider terkunci/i))
+    expect(fetchMock.mock.calls.some(([request]) => requestUrl(request).endsWith('/api/v1/settings/providers/fal/validate'))).toBe(true)
+  })
+
+  it('keeps 9Router key storage and its real connection probe separate from fal', async () => {
+    const fetchMock = RUNTIME_ENDPOINTS(vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = requestUrl(input)
+      if (url.endsWith('/api/v1/auth/csrf')) return Promise.resolve(new Response(JSON.stringify({ csrf_token: 'csrf-router' }), { status: 200 }))
+      if (url.endsWith('/api/v1/settings/providers') && init?.method === 'POST') return Promise.resolve(new Response(JSON.stringify({ saved: ['9router'] }), { status: 200 }))
+      if (url.endsWith('/api/v1/settings/providers')) return Promise.resolve(new Response(JSON.stringify([{ provider: 'fal', configured: false }, { provider: '9router', configured: true }]), { status: 200 }))
+      if (url.endsWith('/api/v1/settings/providers/9router/validate')) return Promise.resolve(new Response(JSON.stringify({ ok: true, provider: '9router' }), { status: 200 }))
+      return Promise.reject(new Error(`unexpected request: ${url}`))
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<BerandaApp />)
+    fireEvent.click(screen.getByRole('button', { name: 'Setelan' }))
+    fireEvent.change(screen.getByLabelText('Kunci baru 9Router'), { target: { value: 'router-live-key' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Simpan kunci 9Router' }))
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Status koneksi 9Router' })).toHaveTextContent(/tersimpan/i))
+    fireEvent.click(screen.getByRole('button', { name: 'Check connection 9Router' }))
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Status koneksi 9Router' })).toHaveTextContent(/provider menerima autentikasi/i))
+    expect(fetchMock.mock.calls.some(([request]) => requestUrl(request).endsWith('/api/v1/settings/providers/9router/validate'))).toBe(true)
+  })
+
+  it('lets the human select an image provider and blocks OpenAI honestly until its connector exists', () => {
+    render(<BerandaApp />)
+    const provider = screen.getByLabelText('Image provider')
+    expect(provider).toHaveValue('fal')
+    fireEvent.change(provider, { target: { value: 'openai' } })
+    expect(screen.getByLabelText('Image provider')).toHaveValue('openai')
+    expect(screen.getByLabelText('Model gambar')).toHaveValue('gpt-image-2.5-sunburst')
+    expect(screen.getByRole('button', { name: 'Setujui prompt' })).toBeDisabled()
+    expect(screen.getByRole('log')).toHaveTextContent(/connector OpenAI belum tersedia/i)
   })
 
 })

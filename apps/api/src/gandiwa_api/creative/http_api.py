@@ -56,6 +56,22 @@ def require_owned_session(request: Request, settings: Settings) -> str:
     return owner
 
 
+def _require_ruleset_identity(rules_snapshot: dict[str, Any]) -> None:
+    """Issue #26: queued jobs must carry versioned locked-ruleset evidence."""
+    identifier = rules_snapshot.get("id")
+    version = rules_snapshot.get("version")
+    if not isinstance(identifier, str) or not identifier.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="rules snapshot requires a non-empty id",
+        )
+    if not isinstance(version, str) or not version.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="rules snapshot requires a non-empty version",
+        )
+
+
 def enqueue_browser_job(
     payload: CreativeJobRequest,
     *,
@@ -63,6 +79,7 @@ def enqueue_browser_job(
     settings: Settings,
 ) -> QueueJob:
     """Revalidate a browser snapshot then enqueue exactly one owned durable job."""
+    _require_ruleset_identity(payload.rules_snapshot)
     queue = QueueStore(create_sqlite_engine(settings))
     try:
         job_id = enqueue_approved_generation(

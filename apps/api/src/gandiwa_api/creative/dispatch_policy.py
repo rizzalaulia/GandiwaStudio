@@ -72,8 +72,14 @@ def enqueue_approved_generation(
         or not idempotency_key
         or origin.rstrip("/") != "https://queue.fal.run"
         or not rules_snapshot
+        or not isinstance(rules_snapshot.get("id"), str)
+        or not str(rules_snapshot.get("id")).strip()
+        or not isinstance(rules_snapshot.get("version"), str)
+        or not str(rules_snapshot.get("version")).strip()
     ):
-        raise GenerationDispatchError("generation job identity and rules snapshot are required")
+        raise GenerationDispatchError(
+            "generation job identity and versioned rules snapshot are required"
+        )
     prompt = session.prompt
     parameters: dict[str, object] = {
         "origin": origin,

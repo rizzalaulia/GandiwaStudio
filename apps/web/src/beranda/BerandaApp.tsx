@@ -21,7 +21,7 @@ import {
   requestProjectWritePermission,
   type DirectoryHandleLike,
 } from '../project-lifecycle'
-import { companionHeadersForToken } from './settings-client'
+import { companionHeadersForToken, providerSettingsView, type ProviderName } from './settings-client'
 import { buildApprovedCreativeJob } from './creative-session-adapter'
 import { dispatchApprovedCreativeJob, monitorCreativeJobToRevision } from './creative-dispatch-controller'
 import { fetchCreativeJob, downloadCreativeArtifact, cancelCreativeJob } from './creative-job-client'
@@ -53,7 +53,7 @@ import {
   type RevisionAuditDirectory,
 } from '../revision-audit-pipeline'
 
-// Issue #26 (opsi B, ronde 4) — Beranda meja studio + header controls:
+// Issue #26 (opsi B, ronde 4), Beranda meja studio + header controls:
 // theme toggle (malam/siang) dan tombol Setelan. Dialog Setelan memuat
 // Bahasa (id/en, dipersist, mengganti seluruh label UI) dan API Key
 // (fal.ai & 9Router: status ter-mask, simpan via companion-token envelope,
@@ -64,7 +64,7 @@ type Lang = 'id' | 'en'
 
 const STRINGS = {
   id: {
-    appTitle: 'Gandiwa Studio — Beranda',
+    appTitle: 'Gandiwa Studio: Beranda',
     noProject: 'Belum ada proyek aktif. Buka folder proyek untuk mulai.',
     activeProject: 'Proyek aktif',
     openProject: 'Buka proyek',
@@ -99,23 +99,23 @@ const STRINGS = {
     keywords: 'Kata kunci (dipisah koma)',
     keywordsPlaceholder: 'kucing, studio, ilustrasi flat, ...',
     keywordCount: 'kata kunci',
-    stageEmpty: 'Hasil generate tampil di sini — satu job, satu gambar.',
+    stageEmpty: 'Hasil generate tampil di sini, satu job, satu gambar.',
     targetPixels: 'Target piksel',
     ratioWord: 'rasio',
-    kandidatEmpty: 'Belum ada kandidat — 1 generate = 1 gambar, hasil terakhir menempel di strip ini dengan piksel aktualnya.',
+    kandidatEmpty: 'Belum ada kandidat, 1 generate = 1 gambar, hasil terakhir menempel di strip ini dengan piksel aktualnya.',
     keyConfigured: 'tersimpan',
     keyMissing: 'belum ada key',
     keyPlaceholder: 'Tempel kunci API baru di sini',
     keyNote: 'Kunci hanya disimpan di backend, tidak pernah tampil utuh kembali.',
     testKey: 'Check connection',
-    testValid: 'kunci valid — provider menerima autentikasi',
-    testRejected: 'kunci DITOLAK provider — periksa/paste ulang key',
-    testAccountLocked: 'kunci SAH — tanpa autentikasi gagal; akun provider terkunci (mis. saldo habis). Selesaikan di dashboard provider; kunci tidak perlu di-paste ulang.',
-    testUnreachable: 'provider tidak terjangkau — validitas belum bisa dipastikan',
+    testValid: 'kunci valid, provider menerima autentikasi',
+    testRejected: 'kunci DITOLAK provider, periksa/paste ulang key',
+    testAccountLocked: 'kunci SAH, tanpa autentikasi gagal; akun provider terkunci (mis. saldo habis). Selesaikan di dashboard provider; kunci tidak perlu di-paste ulang.',
+    testUnreachable: 'provider tidak terjangkau, validitas belum bisa dipastikan',
     testError: 'gagal mengetes kunci',
   },
   en: {
-    appTitle: 'Gandiwa Studio — Home',
+    appTitle: 'Gandiwa Studio: Home',
     noProject: 'No active project yet. Open a project folder to start.',
     activeProject: 'Active project',
     openProject: 'Open project',
@@ -150,19 +150,19 @@ const STRINGS = {
     keywords: 'Keywords (comma separated)',
     keywordsPlaceholder: 'cat, studio, flat illustration, ...',
     keywordCount: 'keywords',
-    stageEmpty: 'Generated results appear here — one job, one image.',
+    stageEmpty: 'Generated results appear here, one job, one image.',
     targetPixels: 'Target pixels',
     ratioWord: 'ratio',
-    kandidatEmpty: 'No candidates yet — 1 generate = 1 image; the latest result lands in this strip with its actual pixels.',
+    kandidatEmpty: 'No candidates yet, 1 generate = 1 image; the latest result lands in this strip with its actual pixels.',
     keyConfigured: 'stored',
     keyMissing: 'no key',
     keyPlaceholder: 'Paste a new API key here',
     keyNote: 'Keys are stored server-side only and are never shown back in full.',
     testKey: 'Test',
-    testValid: 'key is valid — the provider accepted authentication',
-    testRejected: 'key REJECTED by the provider — re-check or re-paste the key',
-    testAccountLocked: 'key is VALID — authentication did not fail; the provider account is locked (e.g. exhausted balance). Resolve it at the provider dashboard; the key does not need re-pasting.',
-    testUnreachable: 'provider unreachable — validity cannot be confirmed yet',
+    testValid: 'key is valid, the provider accepted authentication',
+    testRejected: 'key REJECTED by the provider, re-check or re-paste the key',
+    testAccountLocked: 'key is VALID, authentication did not fail; the provider account is locked (e.g. exhausted balance). Resolve it at the provider dashboard; the key does not need re-pasting.',
+    testUnreachable: 'provider unreachable, validity cannot be confirmed yet',
     testError: 'failed to test the key',
   },
 } as const
@@ -171,13 +171,18 @@ type Strings = (typeof STRINGS)[Lang]
 
 // Model yang sah untuk dispatch nyata; sinkron dengan
 // dispatch_policy.CURRENT_IMAGE_GENERATION_PROVIDER_MODELS di backend.
-const MODEL_OPTIONS: ReadonlyArray<{ id: string; label: string }> = [
-  { id: 'fal-ai/flux/schnell', label: 'FLUX Schnell' },
-  { id: 'fal-ai/flux/dev', label: 'FLUX Dev' },
-  { id: 'fal-ai/flux-realism', label: 'FLUX Realism' },
-  { id: 'fal-ai/imagen', label: 'Imagen' },
-  { id: 'fal-ai/sdxl', label: 'SDXL' },
-]
+const MODEL_OPTIONS: Readonly<Record<'fal' | 'openai', ReadonlyArray<{ id: string; label: string }>>> = {
+  fal: [
+    { id: 'fal-ai/flux/schnell', label: 'FLUX Schnell' },
+    { id: 'fal-ai/flux/dev', label: 'FLUX Dev' },
+    { id: 'fal-ai/flux-realism', label: 'FLUX Realism' },
+    { id: 'fal-ai/imagen', label: 'Imagen' },
+    { id: 'fal-ai/sdxl', label: 'SDXL' },
+  ],
+  openai: [
+    { id: 'gpt-image-2.5-sunburst', label: 'GPT Image 2.5 Sunburst' },
+  ],
+}
 
 const TIERS: ReadonlyArray<{ id: QualityTierId; label: string }> = [
   { id: 'medium', label: 'Medium · 4 MP' },
@@ -192,73 +197,52 @@ function providerLabel(provider: string): string {
 }
 
 type ProviderKeyRowProps = {
-  provider: string
+  provider: ProviderName
   label: string
   value: string
   onChange: (value: string) => void
   configured: boolean
-  unavailable?: boolean
-  validateProviderKey?: (provider: 'fal') => void
+  onSave: (provider: ProviderName, key: string) => void
+  onValidate: (provider: ProviderName) => void
+  saving?: boolean
   testing?: boolean
-  keyTest?: { provider: string; note: string; level: 'ok' | 'rejected' | 'account' | 'unreachable' | 'error' } | null
+  keyTest?: { provider: ProviderName; note: string; level: 'ok' | 'rejected' | 'account' | 'unreachable' | 'error' } | null
   t: Strings
 }
 
-function ProviderKeyRow({ provider, label, value, onChange, configured, unavailable = false, validateProviderKey, testing = false, keyTest = null, t }: ProviderKeyRowProps) {
+function ProviderKeyRow({ provider, label, value, onChange, configured, onSave, onValidate, saving = false, testing = false, keyTest = null, t }: ProviderKeyRowProps) {
   const rowTest = keyTest !== null && keyTest.provider === provider ? keyTest : null
   const testLevelClass = rowTest === null ? '' : ` beranda-keytest-${rowTest.level}`
   return (
     <div className="beranda-keyrow">
       <div className="beranda-keyrow-head">
         <strong>{label}</strong>
-        <span className="beranda-chip">{unavailable ? 'belum didukung' : configured ? t.keyConfigured : t.keyMissing}</span>
+        <span className="beranda-chip">{configured ? t.keyConfigured : t.keyMissing}</span>
       </div>
       <label className="beranda-field">
         <span>{t.newKey} {label}</span>
         <input type="password" autoComplete="off" aria-label={`${t.newKey} ${label}`} value={value} onChange={(event) => onChange(event.target.value)} placeholder={t.keyPlaceholder} />
       </label>
-      {unavailable && <p className="beranda-note">Connector backend belum tersedia — kunci tidak akan disimpan.</p>}
+      <p className="beranda-note">{t.keyNote}</p>
       <div className="beranda-keyrow-actions">
-        {!unavailable && validateProviderKey !== undefined && (
-          <button
-            type="button"
-            className={`beranda-btn-test${testLevelClass}`}
-            aria-label={`${t.testKey} ${label}`}
-            disabled={value.trim().length === 0 || testing}
-            onClick={() => {
-              if (provider === 'fal') validateProviderKey(provider)
-            }}
-          ><span className="beranda-btn-test-icon" aria-hidden="true">{testing ? '⏳' : rowTest === null ? '⚡' : rowTest.level === 'ok' ? '✓' : rowTest.level === 'rejected' ? '✕' : rowTest.level === 'account' ? '🔒' : '⚠'}</span>{testing ? `${t.testKey}…` : t.testKey} {label}</button>
-        )}
+        <button
+          type="button"
+          className="beranda-toolbar-button"
+          aria-label={`Simpan kunci ${label}`}
+          disabled={value.trim().length === 0 || saving}
+          onClick={() => onSave(provider, value)}
+        >{saving ? 'Menyimpan…' : 'Simpan kunci'}</button>
+        <button
+          type="button"
+          className={`beranda-btn-test${testLevelClass}`}
+          aria-label={`${t.testKey} ${label}`}
+          disabled={!configured || testing || saving}
+          onClick={() => onValidate(provider)}
+        ><span className="beranda-btn-test-icon" aria-hidden="true">{testing ? '⏳' : rowTest === null ? '⚡' : rowTest.level === 'ok' ? '✓' : rowTest.level === 'rejected' ? '✕' : rowTest.level === 'account' ? '🔒' : '⚠'}</span>{testing ? `${t.testKey}…` : t.testKey} {label}</button>
       </div>
       {rowTest !== null && (
-        <p role="status" className={`beranda-keytest beranda-keytest-${rowTest.level}`}>{rowTest.note}</p>
+        <p role="status" aria-label={`Status koneksi ${label}`} className={`beranda-keytest beranda-keytest-${rowTest.level}`}>{rowTest.note}</p>
       )}
-    </div>
-  )
-}
-
-type LocalConnectionFieldsProps = Readonly<{
-  name: string; setName: (value: string) => void
-  prefix: string; setPrefix: (value: string) => void
-  apiType: string; setApiType: (value: string) => void
-  baseUrl: string; setBaseUrl: (value: string) => void
-  modelId: string; setModelId: (value: string) => void
-  compact?: boolean
-}>
-
-function LocalConnectionFields({ name, setName, prefix, setPrefix, apiType, setApiType, baseUrl, setBaseUrl, modelId, setModelId, compact = false }: LocalConnectionFieldsProps) {
-  const [checked, setChecked] = useState(false)
-  const complete = baseUrl.trim().length > 0 && modelId.trim().length > 0
-  return (
-    <div className="beranda-local-connection">
-      {!compact && <label className="beranda-field"><span>Nama koneksi</span><input aria-label="Nama koneksi gambar" value={name} onChange={(event) => { setName(event.target.value); setChecked(false) }} placeholder="Mis. studio image API" /></label>}
-      <label className="beranda-field"><span>Tipe API</span><select aria-label={compact ? 'Tipe API reasoning dan metadata' : 'Tipe API gambar'} value={apiType} onChange={(event) => { setApiType(event.target.value); setChecked(false) }}><option value="responses">Responses-compatible</option><option value="chat">Chat Completions-compatible</option><option value="messages">Messages-compatible</option></select></label>
-      {!compact && <label className="beranda-field"><span>Prefix API key</span><input aria-label="Prefix API key gambar" value={prefix} onChange={(event) => { setPrefix(event.target.value); setChecked(false) }} placeholder="Bearer" /></label>}
-      <label className="beranda-field"><span>Base URL</span><input aria-label={compact ? 'Base URL reasoning dan metadata' : 'Base URL gambar'} value={baseUrl} onChange={(event) => { setBaseUrl(event.target.value); setChecked(false) }} placeholder="https://api.example.com/v1" /></label>
-      <label className="beranda-field"><span>Model ID</span><input aria-label={compact ? 'Model ID reasoning dan metadata' : 'Model ID gambar'} value={modelId} onChange={(event) => { setModelId(event.target.value); setChecked(false) }} placeholder="model-id" /></label>
-      <button type="button" className="beranda-btn-test" disabled={!complete} onClick={() => setChecked(true)}>⚡ Check connection</button>
-      {checked && <p role="status" className="beranda-keytest beranda-keytest-ok">Check connection rev3: bentuk isian valid secara lokal. Belum menghubungi provider atau memotong kredit.</p>}
     </div>
   )
 }
@@ -299,7 +283,7 @@ function revisionHistoryFromSnapshot(snapshot: string): { history: RevisionHisto
   try {
     parsed = JSON.parse(snapshot)
   } catch {
-    return { history: [], error: 'Manifest proyek bukan JSON valid — riwayat revisi tidak dibaca.', latestAssetId: null }
+    return { history: [], error: 'Manifest proyek bukan JSON valid, riwayat revisi tidak dibaca.', latestAssetId: null }
   }
   try {
     const manifest = validateProjectManifest(parsed)
@@ -355,21 +339,14 @@ export function BerandaApp() {
   const [workPage, setWorkPage] = useState<'create' | 'prepare'>('create')
   const [metadataReviewed, setMetadataReviewed] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [keyTest, setKeyTest] = useState<{ provider: string; note: string; level: 'ok' | 'rejected' | 'account' | 'unreachable' | 'error' } | null>(null)
-  const [testingProvider, setTestingProvider] = useState<'fal' | '9router' | null>(null)
+  const [keyTest, setKeyTest] = useState<{ provider: ProviderName; note: string; level: 'ok' | 'rejected' | 'account' | 'unreachable' | 'error' } | null>(null)
+  const [testingProvider, setTestingProvider] = useState<ProviderName | null>(null)
+  const [savingProvider, setSavingProvider] = useState<ProviderName | null>(null)
+  const [storedProviderState, setStoredProviderState] = useState<Readonly<Record<ProviderName, boolean>>>({ fal: false, '9router': false })
 
   const [newFalKey, setNewFalKey] = useState('')
-  // Purwarupa rev3: bentuk koneksi lokal, belum dipersist atau dihubungkan.
-  const [imageConnectionKind, setImageConnectionKind] = useState<'fal' | 'openai' | 'self'>('fal')
-  const [imageConnectionName, setImageConnectionName] = useState('')
-  const [imageConnectionPrefix, setImageConnectionPrefix] = useState('')
-  const [imageApiType, setImageApiType] = useState('responses')
-  const [imageBaseUrl, setImageBaseUrl] = useState('')
-  const [imageModelId, setImageModelId] = useState('')
-  const [reasoningProvider, setReasoningProvider] = useState('anthropic')
-  const [reasoningApiType, setReasoningApiType] = useState('messages')
-  const [reasoningBaseUrl, setReasoningBaseUrl] = useState('')
-  const [reasoningModelId, setReasoningModelId] = useState('')
+  const [newRouterKey, setNewRouterKey] = useState('')
+  const [imageProvider, setImageProvider] = useState<'fal' | 'openai'>('fal')
 
   const t: Strings = STRINGS[lang]
 
@@ -420,7 +397,7 @@ export function BerandaApp() {
   const [artifactExpiresAt, setArtifactExpiresAt] = useState<string | null>(null)
   const [activeAssetId, setActiveAssetId] = useState<string | null>(null)
   const [contentType, setContentType] = useState<ContentType>('illustration')
-  // Riwayat revisi riil dari manifest proyek aktif — kandidat compare di #26
+  // Riwayat revisi riil dari manifest proyek aktif, kandidat compare di #26
   // adalah perbandingan antar-revision hasil regenerate, bukan batch kandidat.
   const [projectRevisions, setProjectRevisions] = useState<ReadonlyArray<RevisionHistoryEntry>>([])
   const [selectedRevisionKey, setSelectedRevisionKey] = useState<string | null>(null)
@@ -625,11 +602,11 @@ export function BerandaApp() {
     const operation = ++brainstormSequence.current
     const isCurrentOperation = () => brainstormSequence.current === operation
     if (assistantInstance === null) {
-      setGenerationStatus({ state: 'error', message: 'Pilih instance 9Router di Setelan dulu — tanpa pemilihan otomatis.' })
+      setGenerationStatus({ state: 'error', message: 'Pilih instance 9Router di Setelan dulu, tanpa pemilihan otomatis.' })
       return
     }
     if (assistantModel.trim().length === 0) {
-      setGenerationStatus({ state: 'error', message: 'Pilih model reasoning 9Router di Setelan dulu — tanpa pemilihan otomatis.' })
+      setGenerationStatus({ state: 'error', message: 'Pilih model reasoning 9Router di Setelan dulu, tanpa pemilihan otomatis.' })
       return
     }
     setBrainstormBusy(true)
@@ -673,7 +650,7 @@ export function BerandaApp() {
         throw new Error('Snapshot manifest proyek belum tersedia.')
       }
       const generationTarget = resolutionForTier(tier, aspectRatio)
-      // Kontinuitas asset: sesi kreatif memakai asset ID target — saat asset
+      // Kontinuitas asset: sesi kreatif memakai asset ID target, saat asset
       // aktif dipulihkan dari manifest/pilihan strip, sidecar, persisted session,
       // dan revisi manifest sama-sama menempel di asset itu, jadi regenerate
       // berikutnya menjadi rev-N+1 alih-alih tile asset terpisah.
@@ -688,6 +665,7 @@ export function BerandaApp() {
         topic: activeProjectName,
         prompt,
         negativePrompt,
+        // OpenAI is blocked before this path until its connector contract lands.
         providerId: 'fal',
         modelId: model,
         width: generationTarget.width,
@@ -754,7 +732,7 @@ export function BerandaApp() {
               state: 'review',
               message: [outcome.message, outcome.job?.error_code ? `Kode: ${outcome.job.error_code}` : null]
                 .filter(Boolean)
-                .join(' — '),
+                .join(', '),
             })
             setActiveJobId(null)
           } else if (outcome.status === 'cancelled') {
@@ -765,7 +743,7 @@ export function BerandaApp() {
               state: 'error',
               message: [outcome.error ?? outcome.message ?? `Job ${outcome.status}.`, outcome.job?.error_code ? `Kode: ${outcome.job.error_code}` : null]
                 .filter(Boolean)
-                .join(' — '),
+                .join(', '),
             })
             setActiveJobId(null)
           }
@@ -773,7 +751,7 @@ export function BerandaApp() {
         },
         // The UI owns the blob URL lifetime: it stays valid while displayed
         // and is revoked by the canvas-image effect below on replacement or
-        // unmount — not here, or the <img> would point at a dead handle.
+        // unmount, not here, or the <img> would point at a dead handle.
         now: () => Date.now(),
       })
       if (!isCurrentOperation()) return
@@ -821,7 +799,7 @@ export function BerandaApp() {
       await cancelCreativeJob(activeJobId)
       setGenerationStatus((current) => ({
         state: current.state,
-        message: 'Permintaan pembatalan terkirim — menunggu pekerja menyelesaikan dengan aman…',
+        message: 'Permintaan pembatalan terkirim, menunggu pekerja menyelesaikan dengan aman…',
       }))
     } catch (error) {
       setCancelRequested(false)
@@ -1095,7 +1073,7 @@ export function BerandaApp() {
     try {
       window.localStorage.setItem('beranda-theme', theme)
     } catch {
-      // Penyimpanan tidak tersedia — tampilan tetap berubah untuk sesi ini.
+      // Penyimpanan tidak tersedia, tampilan tetap berubah untuk sesi ini.
     }
     return () => root.classList.remove('gandiwa-night')
   }, [theme])
@@ -1118,36 +1096,85 @@ export function BerandaApp() {
     return () => window.removeEventListener('keydown', onKey)
   }, [settingsOpen])
 
-  function validateProviderKey(provider: 'fal') {
-    // Rev3 is explicitly a local-form prototype: never contact an upstream
-    // provider, create a job, or consume credit from this Settings action.
-    setKeyTest(null)
-    setTestingProvider(provider)
-    const candidate = newFalKey
-    if (candidate.trim().length === 0) {
-      setKeyTest({ provider, note: 'Check connection rev3: isi API key terlebih dahulu; belum ada panggilan API.', level: 'error' })
-    } else {
-      setKeyTest({ provider, note: 'Check connection rev3: bentuk isian valid secara lokal. Belum menghubungi provider atau memotong kredit.', level: 'ok' })
+  const refreshProviderSettings = useCallback(async () => {
+    const response = await fetch('/api/v1/settings/providers', { credentials: 'same-origin' })
+    if (!response.ok) throw new Error(`Gagal membaca status provider (${response.status})`)
+    const body = await response.json() as ReadonlyArray<{ provider?: unknown; configured?: unknown }>
+    const next: Record<ProviderName, boolean> = { fal: false, '9router': false }
+    for (const entry of body) {
+      if ((entry.provider === 'fal' || entry.provider === '9router') && entry.configured === true) next[entry.provider] = true
     }
-    setTestingProvider(null)
-  }
+    setStoredProviderState(next)
+  }, [])
+
+  useEffect(() => {
+    if (!settingsOpen) return
+    void refreshProviderSettings().catch(() => {
+      // Fail closed: a status refresh failure never marks a provider configured.
+    })
+  }, [refreshProviderSettings, settingsOpen])
+
+  const saveProviderKey = useCallback(async (provider: ProviderName, apiKey: string) => {
+    setSavingProvider(provider)
+    setKeyTest(null)
+    try {
+      const csrfResponse = await fetch('/api/v1/auth/csrf', { credentials: 'same-origin' })
+      if (!csrfResponse.ok) throw new Error(`Gagal menyiapkan token keamanan (${csrfResponse.status})`)
+      const { csrf_token: csrfToken } = await csrfResponse.json() as { csrf_token?: unknown }
+      if (typeof csrfToken !== 'string' || !csrfToken) throw new Error('Token keamanan backend tidak valid.')
+      await providerSettingsView.save({ csrfToken, payload: { providers: [{ provider, apiKey }] } })
+      await refreshProviderSettings()
+      if (provider === 'fal') setNewFalKey('')
+      else setNewRouterKey('')
+      setKeyTest({ provider, level: 'ok', note: `${providerLabel(provider)} tersimpan di backend. Jalankan Check connection untuk memeriksa autentikasi provider.` })
+    } catch (error) {
+      setKeyTest({ provider, level: 'error', note: error instanceof Error ? error.message : 'Kunci provider tidak dapat disimpan.' })
+    } finally {
+      setSavingProvider(null)
+    }
+  }, [refreshProviderSettings])
+
+  const validateProviderKey = useCallback(async (provider: ProviderName) => {
+    setTestingProvider(provider)
+    setKeyTest(null)
+    try {
+      const response = await fetch(`/api/v1/settings/providers/${provider}/validate`, { credentials: 'same-origin' })
+      const body = await response.json() as { ok?: unknown; reason?: unknown; authenticated?: unknown }
+      if (!response.ok) throw new Error(`Gagal mengetes koneksi provider (${response.status})`)
+      if (body.ok === true) {
+        setKeyTest({ provider, level: 'ok', note: t.testValid })
+      } else if (body.reason === 'account_locked' && body.authenticated === true) {
+        setKeyTest({ provider, level: 'account', note: t.testAccountLocked })
+      } else if (body.reason === 'auth_rejected') {
+        setKeyTest({ provider, level: 'rejected', note: t.testRejected })
+      } else {
+        setKeyTest({ provider, level: 'unreachable', note: t.testUnreachable })
+      }
+    } catch (error) {
+      setKeyTest({ provider, level: 'error', note: error instanceof Error ? error.message : t.testError })
+    } finally {
+      setTestingProvider(null)
+    }
+  }, [t])
 
   const target = useMemo(() => resolutionForTier(tier, aspectRatio), [tier, aspectRatio])
 
   const providerRows = status?.providers ?? []
-  const falConfigured = providerRows.some((entry) => entry.provider === 'fal' && entry.configured)
-  const generationRuntimeReady = contentType !== 'vector' && status?.backend.ready === true && status.worker.status === 'running' && falConfigured
-  const generationBlockReason = contentType === 'vector'
-    ? 'Generate diblokir: fal.ai menghasilkan raster PNG/JPEG, bukan master SVG untuk proyek Vector.'
-    : status === null
-      ? 'Memeriksa kesiapan backend…'
-      : status.backend.ready !== true
-      ? 'Generate diblokir: database, antrean, atau penyimpanan artefak belum siap.'
-      : status.worker.status !== 'running'
-        ? 'Generate diblokir: worker belum berjalan.'
-        : !falConfigured
-          ? 'Generate diblokir: simpan dan tes kunci fal.ai terlebih dahulu.'
-          : null
+  const falConfigured = storedProviderState.fal || providerRows.some((entry) => entry.provider === 'fal' && entry.configured)
+  const generationRuntimeReady = imageProvider === 'fal' && contentType !== 'vector' && status?.backend.ready === true && status.worker.status === 'running' && falConfigured
+  const generationBlockReason = imageProvider === 'openai'
+    ? 'Generate diblokir: connector OpenAI belum tersedia di backend Gandiwa.'
+    : contentType === 'vector'
+      ? 'Generate diblokir: fal.ai menghasilkan raster PNG/JPEG, bukan master SVG untuk proyek Vector.'
+      : status === null
+        ? 'Memeriksa kesiapan backend…'
+        : status.backend.ready !== true
+          ? 'Generate diblokir: database, antrean, atau penyimpanan artefak belum siap.'
+          : status.worker.status !== 'running'
+            ? 'Generate diblokir: worker belum berjalan.'
+            : !falConfigured
+              ? 'Generate diblokir: simpan dan tes kunci fal.ai terlebih dahulu.'
+              : null
 
   return (
     <div className={`beranda ${theme === 'night' ? 'beranda-night' : ''}`} data-page={workPage}>
@@ -1261,14 +1288,30 @@ export function BerandaApp() {
             </label>
           )}
           <label className="beranda-field">
+            <span>Image provider</span>
+            <select
+              aria-label="Image provider"
+              value={imageProvider}
+              onChange={(event) => {
+                const next = event.target.value as 'fal' | 'openai'
+                setImageProvider(next)
+                setModel(MODEL_OPTIONS[next][0]!.id)
+              }}
+            >
+              <option value="fal">fal.ai</option>
+              <option value="openai">OpenAI Image API</option>
+            </select>
+          </label>
+          <label className="beranda-field">
             <span>{t.model}</span>
             <select aria-label={t.model} value={model} onChange={(event) => setModel(event.target.value)}>
-              {MODEL_OPTIONS.map((entry) => (
+              {MODEL_OPTIONS[imageProvider].map((entry) => (
                 <option key={entry.id} value={entry.id}>
                   {entry.label}
                 </option>
               ))}
             </select>
+            {imageProvider === 'openai' && <p className="beranda-note">Connector OpenAI belum tersedia di backend Gandiwa. Provider ini tidak dapat mengirim job sampai integrasi selesai.</p>}
           </label>
           <div className="beranda-field-pair">
             <label className="beranda-field">
@@ -1472,8 +1515,8 @@ export function BerandaApp() {
               <p role="status" aria-label="Master revisi">
                 {masterSelectionMessage ?? (masterRevisionKey === null
                   ? (projectRevisions.length === 0
-                    ? 'Belum ada revisi — generate gambar untuk mengunci master.'
-                    : 'Master belum dipilih — pilih secara eksplisit.')
+                    ? 'Belum ada revisi, generate gambar untuk mengunci master.'
+                    : 'Master belum dipilih, pilih secara eksplisit.')
                   : `Master: rev-${masterRevisionKey.split('/').at(-1)} · tersimpan`)}
               </p>
               <button type="button" className="beranda-toolbar-button" disabled={masterRevisionKey === null} onClick={() => setWorkPage('prepare')}>Prepare this image</button>
@@ -1497,14 +1540,14 @@ export function BerandaApp() {
             <section className="beranda-audit-lifecycle" aria-label="Audit revisi aktif">
               <strong>{auditLifecycle === 'EMPTY'
                 ? 'Belum ada revisi untuk diaudit'
-                : `${auditLifecycle} — export ${auditLifecycle === 'PASS' ? 'menunggu approval' : 'BLOCKED'}`}</strong>
+                : `${auditLifecycle}, export ${auditLifecycle === 'PASS' ? 'menunggu approval' : 'BLOCKED'}`}</strong>
               <p>{auditMessage ?? (auditLifecycle === 'STALE'
                 ? 'Master menunggu preflight terikat asset, revision, checksum metadata, dan ruleset.'
                 : auditLifecycle === 'EMPTY'
                   ? 'Pilih dan kunci master sebelum menjalankan audit.'
                   : `Durable audit ${auditLifecycle} terikat master terpilih.`)}</p>
               {durableAudit?.findings.map((finding) => (
-                <p key={finding.ruleId} className="beranda-note"><strong>{finding.verdict}</strong> · {finding.ruleId} — {finding.message}</p>
+                <p key={finding.ruleId} className="beranda-note"><strong>{finding.verdict}</strong> · {finding.ruleId}, {finding.message}</p>
               ))}
               <button type="button" className="beranda-toolbar-button" disabled={auditBusy || loadedMetadata === null || masterRevisionKey === null} onClick={() => void handleRunAudit()}>{auditBusy ? 'Menjalankan audit…' : 'Jalankan preflight revisi'}</button>
               {loadedMetadata === null && <p className="beranda-note">Simpan metadata valid master terlebih dahulu sebelum audit.</p>}
@@ -1519,9 +1562,9 @@ export function BerandaApp() {
           <section className="beranda-prepare-metadata" aria-label="Metadata selected image">
             <h2>Title, keywords, dan description</h2>
             <div className="beranda-metadata-actions" aria-label="Bantuan metadata AI">
-              <button type="button" className="beranda-toolbar-button" disabled title="Generator metadata belum terhubung pada purwarupa rev3">Generate title — belum tersedia</button>
-              <button type="button" className="beranda-toolbar-button" disabled title="Generator metadata belum terhubung pada purwarupa rev3">Generate keywords — belum tersedia</button>
-              <button type="button" className="beranda-toolbar-button" disabled title="Generator metadata belum terhubung pada purwarupa rev3">Generate metadata — belum tersedia</button>
+              <button type="button" className="beranda-toolbar-button" disabled title="Generator metadata belum terhubung pada purwarupa rev3">Generate title, belum tersedia</button>
+              <button type="button" className="beranda-toolbar-button" disabled title="Generator metadata belum terhubung pada purwarupa rev3">Generate keywords, belum tersedia</button>
+              <button type="button" className="beranda-toolbar-button" disabled title="Generator metadata belum terhubung pada purwarupa rev3">Generate metadata, belum tersedia</button>
             </div>
             <label className="beranda-field"><span>{t.judul}</span><input aria-label={t.judul} value={title} onChange={(event) => { setTitle(event.target.value); setMetadataReviewed(false) }} placeholder={t.judulPlaceholder} /></label>
             <label className="beranda-field"><span>{t.keywords}</span><textarea aria-label={t.keywords} rows={4} value={keywords} onChange={(event) => { setKeywords(event.target.value); setMetadataReviewed(false) }} placeholder={t.keywordsPlaceholder} /></label>
@@ -1531,7 +1574,7 @@ export function BerandaApp() {
             <label className="beranda-field"><span>Status release</span><select aria-label="Status release" value={releaseStatus} disabled={metadataBusy} onChange={(event) => { setReleaseStatus(event.target.value as ReleaseStatus); setMetadataReviewed(false) }}><option value="not_required">Tidak diperlukan</option><option value="attached">Terlampir</option><option value="needs_review">Perlu review</option></select></label>
             <button type="button" className="beranda-toolbar-button" disabled={metadataBusy} onClick={() => void handleSaveMetadata()}>{metadataBusy ? 'Menyimpan metadata…' : 'Simpan metadata revisi'}</button>
             <label className="beranda-review"><input type="checkbox" checked={metadataReviewed} onChange={(event) => setMetadataReviewed(event.target.checked)} /> I reviewed the title, keywords, and description for this selected image.</label>
-            <button type="button" className="beranda-primary beranda-download-ready" disabled title="Paket unduhan belum terhubung pada purwarupa rev3">Download ready — belum tersedia</button>
+            <button type="button" className="beranda-primary beranda-download-ready" disabled title="Paket unduhan belum terhubung pada purwarupa rev3">Download ready, belum tersedia</button>
             <p className="beranda-note">Paket unduhan belum terhubung pada purwarupa rev3; tombol tetap terkunci dan tidak mengunduh gambar atau mengirim ke Adobe.</p>
             {metadataMessage && <p role="status" className="beranda-note">{metadataMessage}</p>}
           </section>
@@ -1610,8 +1653,8 @@ export function BerandaApp() {
               </div>
               <p className="beranda-settings-purpose">
                 {lang === 'id'
-                  ? 'Bahasa antarmuka dan bentuk koneksi AI. Purwarupa ini tidak menyimpan kunci atau menghubungi provider.'
-                  : 'Interface language and AI connection forms. This prototype does not store keys or contact providers.'}
+                  ? 'Bahasa antarmuka dan koneksi AI. Kunci disimpan terenkripsi oleh backend dan pemeriksaan koneksi tidak membuat gambar.'
+                  : 'Interface language and AI connections. Keys are encrypted by the backend and connection checks do not generate images.'}
               </p>
               <ul className="beranda-settings-live">
                 <li>
@@ -1645,32 +1688,16 @@ export function BerandaApp() {
                 </label>
               </section>
               <section aria-labelledby="beranda-settings-keys">
-                <h4 id="beranda-settings-keys">Koneksi purwarupa</h4>
-                <p className="beranda-note">Setelan ini hanya memeriksa kelengkapan isian di perangkat. Belum menyimpan kunci, menghubungi API, atau mengubah provider pekerjaan yang sedang berjalan.</p>
-                <section className="beranda-api-role" aria-label="Image provider">
-                  <div className="beranda-api-role-head"><strong>Image provider</strong><span>untuk halaman Create</span></div>
-                  <label className="beranda-field"><span>Provider</span>
-                    <select aria-label="Provider gambar" value={imageConnectionKind} onChange={(event) => setImageConnectionKind(event.target.value as 'fal' | 'openai' | 'self')}>
-                      <option value="fal">fal.ai</option>
-                      <option value="openai">OpenAI-compatible</option>
-                      <option value="self">Custom provider</option>
-                    </select>
-                  </label>
-                  {imageConnectionKind === 'fal' ? (
-                    <ProviderKeyRow provider="fal" label="fal.ai" value={newFalKey} onChange={setNewFalKey} configured={providerRows.find((entry) => entry.provider === 'fal')?.configured === true} validateProviderKey={validateProviderKey} testing={testingProvider === 'fal'} keyTest={keyTest} t={t} />
-                  ) : (
-                    <LocalConnectionFields name={imageConnectionName} setName={setImageConnectionName} prefix={imageConnectionPrefix} setPrefix={setImageConnectionPrefix} apiType={imageApiType} setApiType={setImageApiType} baseUrl={imageBaseUrl} setBaseUrl={setImageBaseUrl} modelId={imageModelId} setModelId={setImageModelId} />
-                  )}
+                <h4 id="beranda-settings-keys">Koneksi backend</h4>
+                <p className="beranda-note">Kunci disimpan terenkripsi di backend. Check connection memeriksa autentikasi provider tanpa membuat gambar.</p>
+                <section className="beranda-api-role" aria-label="Image provider connection">
+                  <div className="beranda-api-role-head"><strong>Image generation</strong><span>fal.ai dipakai untuk job gambar saat ini</span></div>
+                  <ProviderKeyRow provider="fal" label="fal.ai" value={newFalKey} onChange={setNewFalKey} configured={storedProviderState.fal || providerRows.some((entry) => entry.provider === 'fal' && entry.configured)} onSave={(provider, apiKey) => { void saveProviderKey(provider, apiKey) }} onValidate={(provider) => { void validateProviderKey(provider) }} saving={savingProvider === 'fal'} testing={testingProvider === 'fal'} keyTest={keyTest} t={t} />
+                  <p className="beranda-note">OpenAI Image API dan custom image API belum memiliki connector backend. Pilihan itu tetap terlihat di Create, namun job dikunci sampai connector tersedia.</p>
                 </section>
-                <section className="beranda-api-role" aria-label="Reasoning and metadata provider">
-                  <div className="beranda-api-role-head"><strong>Reasoning / metadata provider</strong><span>untuk bantu prompt &amp; metadata</span></div>
-                  <label className="beranda-field"><span>Provider</span>
-                    <select aria-label="Provider reasoning dan metadata" value={reasoningProvider} onChange={(event) => setReasoningProvider(event.target.value)}>
-                      <option value="anthropic">Anthropic-compatible</option>
-                      <option value="openai">OpenAI-compatible</option>
-                    </select>
-                  </label>
-                  <LocalConnectionFields name="" setName={() => undefined} prefix="" setPrefix={() => undefined} apiType={reasoningApiType} setApiType={setReasoningApiType} baseUrl={reasoningBaseUrl} setBaseUrl={setReasoningBaseUrl} modelId={reasoningModelId} setModelId={setReasoningModelId} compact />
+                <section className="beranda-api-role" aria-label="Reasoning and metadata provider connection">
+                  <div className="beranda-api-role-head"><strong>Reasoning, prompt &amp; metadata</strong><span>9Router untuk brainstorm dan worker bantuan</span></div>
+                  <ProviderKeyRow provider="9router" label="9Router" value={newRouterKey} onChange={setNewRouterKey} configured={storedProviderState['9router'] || providerRows.some((entry) => entry.provider === '9router' && entry.configured)} onSave={(provider, apiKey) => { void saveProviderKey(provider, apiKey) }} onValidate={(provider) => { void validateProviderKey(provider) }} saving={savingProvider === '9router'} testing={testingProvider === '9router'} keyTest={keyTest} t={t} />
                 </section>
               </section>
             </div>
