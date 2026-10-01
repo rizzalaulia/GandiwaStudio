@@ -21,8 +21,22 @@ class ProviderInfo(BaseModel):
     auth_required: bool
 
 
+def configured_provider_key(settings: Settings, provider_id: str) -> str | None:
+    """Read a stored override before the optional deployment environment secret."""
+    from gandiwa_api.security.provider_key_store import ProviderKeyStore
+
+    stored = ProviderKeyStore(settings).get(provider_id)
+    if stored:
+        return stored
+    if provider_id == "openai":
+        return settings.openai_api_key()
+    if provider_id == "fal":
+        return settings.fal_api_key()
+    return None
+
+
 def _fal_configured(settings: Settings) -> bool:
-    if not settings.fal_api_key():
+    if not configured_provider_key(settings, "fal"):
         return False
     try:
         validate_fal_base_url(settings.FAL_BASE_URL)
@@ -39,6 +53,12 @@ def get_configured_providers(settings: Settings) -> list[ProviderInfo]:
     boolean per instance.
     """
     providers = [
+        ProviderInfo(
+            id="openai",
+            name="OpenAI Image API",
+            configured=configured_provider_key(settings, "openai") is not None,
+            auth_required=True,
+        ),
         ProviderInfo(
             id="fal",
             name="fal.ai",
@@ -57,7 +77,7 @@ def get_configured_providers(settings: Settings) -> list[ProviderInfo]:
         providers.append(
             ProviderInfo(
                 id=instance_id,
-                name="9Router" if instance_id.lower() == "9router" else f"9Router · {instance_id}",
+                name=f"9Router · {instance_id}",
                 configured=configured,
                 auth_required=True,
             )

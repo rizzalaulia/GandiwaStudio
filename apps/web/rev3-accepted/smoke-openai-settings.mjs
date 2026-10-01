@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+const require=createRequire('/home/ubuntu/GandiwaStudio/apps/web/node_modules/jsdom/package.json');
+const {JSDOM}=require('jsdom');
+const html=readFileSync(new URL('./settings.html',import.meta.url),'utf8');
+const source=readFileSync(new URL('./rev3-api.js',import.meta.url),'utf8');
+const dom=new JSDOM(html,{runScripts:'outside-only',url:'https://studio.test/settings.html'});
+const w=dom.window,calls=[]; let verdict={ok:false,reason:'account_restricted',authenticated:true};
+w.fetch=async(url,options={})=>{calls.push({url,options});return {ok:true,text:async()=>JSON.stringify(url.endsWith('/csrf')?{csrf_token:'test'}:url.endsWith('/validate')?verdict:options.method==='POST'?{}:[{provider:'openai',configured:true,maskedKey:'****test'}])}};
+w.eval(source);w.document.dispatchEvent(new w.Event('DOMContentLoaded'));
+const tick=()=>new Promise(r=>setTimeout(r,10)); await tick();
+w.document.querySelector('#api-key').value='test-secret';w.document.querySelector('#save-check-connection').click();await tick();
+const posted=calls.find(x=>x.options.method==='POST');assert.ok(posted,'OpenAI key can be explicitly saved');assert.equal(JSON.parse(posted.options.body).providers[0].provider,'openai');assert.equal(w.document.querySelector('#api-key').value,'');
+w.document.querySelector('#check-connection').click();await tick();assert.match(w.document.querySelector('#connection-feedback').textContent,/account.*restrict/i);
+verdict={ok:false,reason:'rate_limited'};w.document.querySelector('#check-connection').click();await tick();assert.match(w.document.querySelector('#connection-feedback').textContent,/rate limit/i);assert.ok(!w.document.querySelector('#connection-feedback').classList.contains('ok'));
+assert.ok(!calls.some(x=>x.url.includes('/creative/jobs')));assert.ok(!w.localStorage.getItem('test-secret'));
+w.close();console.log('PASS OpenAI explicit save, secret clearing, non-billing probe, honest verdicts');

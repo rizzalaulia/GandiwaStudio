@@ -78,7 +78,11 @@ class Settings(BaseSettings):
         exclude=True,
         validation_alias=AliasChoices("FAL_KEY", "GANDIWA_FAL_KEY"),
     )
-    # Slice 2 (Issue #26): server-side encrypted provider key store location.
+    OPENAI_API_KEY: SecretStr | None = Field(
+        default=None,
+        exclude=True,
+        validation_alias=AliasChoices("OPENAI_API_KEY", "GANDIWA_OPENAI_API_KEY"),
+    )
     PROVIDER_KEY_STORE: Path = Path("./var/provider-keys.json")
 
     @field_validator("ALLOWED_ORIGINS", mode="before")
@@ -174,6 +178,10 @@ class Settings(BaseSettings):
     def fal_api_key(self) -> str | None:
         """Raw fal key for server-side transport injection only."""
         return self.FAL_KEY.get_secret_value() if self.FAL_KEY is not None else None
+
+    def openai_api_key(self) -> str | None:
+        """Raw OpenAI key for server-side transport injection only."""
+        return self.OPENAI_API_KEY.get_secret_value() if self.OPENAI_API_KEY is not None else None
 
     @model_validator(mode="after")
     def validate_security_settings(self) -> Settings:

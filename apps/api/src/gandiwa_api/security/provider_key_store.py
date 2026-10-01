@@ -1,13 +1,4 @@
-"""Encrypted-at-rest provider API key store (Slice 2, Issue #26).
-
-Keys live server-side only. At rest they are sealed with Fernet (AES-128-CBC
-+ HMAC, from ``cryptography``) under a key derived from the session secret —
-the same secret that already guards cookies, so no second root secret exists.
-The plaintext key never appears in logs, responses, or the store file.
-
-Restart-free by design: every read loads the current file, so another
-process (or a later request lifecycle) observes saved keys immediately.
-"""
+"""Encrypted-at-rest provider API keys, private to the backend process."""
 
 from __future__ import annotations
 
@@ -27,7 +18,6 @@ _KDF_INFO = b"gandiwa-provider-key-store-v1"
 
 
 def _fernet_for_secret(secret: str) -> Fernet:
-    """Derive the store key from the session secret via HKDF-SHA256."""
     derived = HKDF(
         algorithm=hashes.SHA256(),
         length=32,
@@ -40,8 +30,16 @@ def _fernet_for_secret(secret: str) -> Fernet:
 def _atomic_write(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    tmp.write_bytes(data)
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "xb") as handle:
+            os.chmod(tmp, 0o600)
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+        os.chmod(path, 0o600)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 class ProviderKeyStore:
@@ -56,9 +54,10 @@ class ProviderKeyStore:
             return None
         try:
             envelope = json.loads(self._path.read_text(encoding="utf-8"))
-            if envelope.get("version") != STORE_VERSION:
+            if not isinstance(envelope, dict) or envelope.get("version") != STORE_VERSION:
                 return None
-            sealed = envelope.get("keys", {}).get(provider_id)
+            keys = envelope.get("keys")
+            sealed = keys.get(provider_id) if isinstance(keys, dict) else None
             if not isinstance(sealed, str):
                 return None
             value: bytes = self._fernet.decrypt(sealed.encode("ascii"))
@@ -69,7 +68,6 @@ class ProviderKeyStore:
 
     def set(self, provider_id: str, key: str) -> None:
         keys_map: dict[str, str] = {}
-        envelope: dict[str, object] = {"version": STORE_VERSION, "keys": keys_map}
         if self._path.exists():
             try:
                 existing = json.loads(self._path.read_text(encoding="utf-8"))
@@ -78,25 +76,15 @@ class ProviderKeyStore:
                     isinstance(existing, dict)
                     and existing.get("version") == STORE_VERSION
                     and isinstance(keys, dict)
-                    and all(isinstance(k, str) for k in keys.values())
+                    and all(isinstance(value, str) for value in keys.values())
                 ):
                     keys_map.update(keys)
             except (OSError, ValueError):
-                keys_map = {}
-                envelope = {"version": STORE_VERSION, "keys": keys_map}
-        sealed = self._fernet.encrypt(key.encode("utf-8")).decode("ascii")
-        keys_map[provider_id] = sealed
-        _atomic_write(self._path, json.dumps(envelope, separators=(",", ":")).encode("utf-8"))
-
-    def remove(self, provider_id: str) -> None:
-        if not self._path.exists():
-            return
-        try:
-            envelope = json.loads(self._path.read_text(encoding="utf-8"))
-            keys = envelope.get("keys", {})
-        except (OSError, ValueError):
-            return
-        if provider_id in keys:
-            keys.pop(provider_id, None)
-            envelope["keys"] = keys
-            _atomic_write(self._path, json.dumps(envelope, separators=(",", ":")).encode("utf-8"))
+                pass
+        keys_map[provider_id] = self._fernet.encrypt(key.encode("utf-8")).decode("ascii")
+        _atomic_write(
+            self._path,
+            json.dumps(
+                {"version": STORE_VERSION, "keys": keys_map}, separators=(",", ":")
+            ).encode(),
+        )
