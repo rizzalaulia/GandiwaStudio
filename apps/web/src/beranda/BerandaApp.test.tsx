@@ -1,5 +1,17 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const rasterPreparation = vi.hoisted(() => ({ prepareExistingRasterRevision: vi.fn() }))
+const masterSelection = vi.hoisted(() => ({
+  resolveMasterSelection: vi.fn(),
+  saveMasterSelection: vi.fn(),
+  loadMasterSelection: vi.fn(),
+}))
+vi.mock('./raster-revision-preparation', () => rasterPreparation)
+vi.mock('../master-selection-store', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../master-selection-store')>(),
+  ...masterSelection,
+}))
 
 import { BerandaApp } from './BerandaApp'
 
@@ -265,6 +277,39 @@ function fakeProjectDirectory(overrides: { manifestText?: string } = {}): unknow
 // the real merge path in status-client.ts.
 
 describe('Beranda — meja kerja studio', () => {
+  beforeEach(() => {
+    masterSelection.loadMasterSelection.mockResolvedValue(undefined)
+    masterSelection.resolveMasterSelection.mockImplementation(async (input: { assetId: string; revision: number }) => ({
+      schemaVersion: 1,
+      assetId: input.assetId,
+      revision: input.revision,
+      relativePath: `revisions/${input.assetId}/${input.revision}/master.jpeg`,
+      revisionChecksum: 'a'.repeat(64),
+      selectedAt: '2026-10-01T00:00:00.000Z',
+      selectedBy: 'Master Peng',
+    }))
+    masterSelection.saveMasterSelection.mockResolvedValue({ snapshot: 'master-selection-snapshot' })
+    rasterPreparation.prepareExistingRasterRevision.mockImplementation(async (input: { manifest: { assets: Array<{ asset_id: string; revisions: Array<object> }> }; assetId: string }) => {
+      const asset = input.manifest.assets.find((candidate) => candidate.asset_id === input.assetId)
+      if (!asset) throw new Error('asset is unavailable')
+      const revision = asset.revisions.length + 1
+      return {
+        revision,
+        manifest: {
+          ...input.manifest,
+          assets: input.manifest.assets.map((candidate) => candidate.asset_id !== input.assetId ? candidate : {
+            ...candidate,
+            revisions: [...candidate.revisions, {
+              revision,
+              generation_format: 'png', working_format: 'jpeg', master_format: 'jpeg', submission_format: 'jpeg',
+              relative_path: `revisions/${input.assetId}/${revision}/master.jpeg`,
+            }],
+          }),
+        },
+      }
+    })
+  })
+
   afterEach(() => {
     cleanup()
     vi.unstubAllGlobals()
@@ -439,16 +484,23 @@ describe('Beranda — meja kerja studio', () => {
     const rev1 = screen.getByRole('option', { name: /rev-1/ })
     const rev2 = screen.getByRole('option', { name: /rev-2/ })
     fireEvent.click(rev1)
+    fireEvent.click(screen.getByRole('button', { name: 'Siapkan JPEG untuk audit' }))
+    await waitFor(() => expect(screen.getByText('JPEG rev-3 siap untuk audit. Kandidat asli rev-1 tetap tersimpan.')).toBeInTheDocument())
+    const prepared = screen.getByRole('option', { name: /rev-3/ })
+    expect(rasterPreparation.prepareExistingRasterRevision).toHaveBeenCalledWith(expect.objectContaining({ assetId: expect.any(String), sourceRevision: 1 }))
+    expect(rev1).toBeInTheDocument()
+    fireEvent.click(prepared)
     fireEvent.click(screen.getByRole('button', { name: 'Lock prepared JPEG as master' }))
-    await waitFor(() => expect(screen.getByRole('status', { name: 'Master revisi' })).toHaveTextContent('rev-1'))
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Master revisi' })).toHaveTextContent('rev-3'))
     expect(screen.getByRole('status', { name: 'Master revisi' })).toHaveTextContent('tersimpan')
-    expect(rev1).toHaveAttribute('data-master', 'true')
+    expect(rev1).toHaveAttribute('data-master', 'false')
     expect(rev2).toHaveAttribute('data-master', 'false')
+    expect(prepared).toHaveAttribute('data-master', 'true')
 
     // Memilih kandidat lain sesudah lock tidak boleh mengganti identitas kerja Prepare.
     fireEvent.click(rev2)
     fireEvent.click(screen.getByRole('button', { name: 'Prepare this image' }))
-    expect(screen.getByTestId('prepare-master-stage')).toHaveAttribute('data-master-revision', expect.stringMatching(/\/1$/))
+    expect(screen.getByTestId('prepare-master-stage')).toHaveAttribute('data-master-revision', expect.stringMatching(/\/3$/))
     expect(screen.getByRole('button', { name: 'Download ready, belum tersedia' })).toBeDisabled()
     fireEvent.click(screen.getByRole('checkbox', { name: /I reviewed the title/ }))
     expect(screen.getByRole('button', { name: 'Download ready, belum tersedia' })).toBeDisabled()
@@ -708,8 +760,11 @@ describe('Beranda — meja kerja studio', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Buka proyek' }))
     await waitFor(() => expect(screen.getByRole('toolbar')).toHaveTextContent('dibuka secara lokal'))
     fireEvent.click(screen.getByRole('option', { name: /rev-1/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Siapkan JPEG untuk audit' }))
+    await waitFor(() => expect(screen.getByRole('option', { name: /rev-2/ })).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('option', { name: /rev-2/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Lock prepared JPEG as master' }))
-    await waitFor(() => expect(screen.getByRole('status', { name: 'Master revisi' })).toHaveTextContent('rev-1'))
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Master revisi' })).toHaveTextContent('rev-2'))
     fireEvent.click(screen.getByRole('button', { name: 'Prepare this image' }))
 
     fireEvent.change(screen.getByLabelText('Judul'), { target: { value: 'Ceramic cup with soft studio light' } })
@@ -794,8 +849,11 @@ describe('Beranda — meja kerja studio', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Buka proyek' }))
     await waitFor(() => expect(screen.getByRole('toolbar')).toHaveTextContent('dibuka secara lokal'))
     fireEvent.click(screen.getByRole('option', { name: /rev-1/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Siapkan JPEG untuk audit' }))
+    await waitFor(() => expect(screen.getByRole('option', { name: /rev-2/ })).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('option', { name: /rev-2/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Lock prepared JPEG as master' }))
-    await waitFor(() => expect(screen.getByRole('status', { name: 'Master revisi' })).toHaveTextContent('rev-1'))
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Master revisi' })).toHaveTextContent('rev-2'))
     fireEvent.click(screen.getByRole('button', { name: 'Prepare this image' }))
 
     // Metadata must exist before audit may run (audit binds metadata).
@@ -842,7 +900,7 @@ describe('Beranda — alur rev3 Create → Prepare', () => {
     expect(screen.getByRole('button', { name: 'Prepare' })).not.toHaveAttribute('aria-current')
     expect(screen.getByRole('button', { name: 'Prepare this image' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Lock prepared JPEG as master' })).toBeDisabled()
-    expect(screen.getByText(/minimal satu hasil generate/)).toBeInTheDocument()
+    expect(screen.getByText(/Kandidat asli tetap dapat diambil/)).toBeInTheDocument()
     expect(screen.getByRole('region', { name: 'Create image' })).toBeVisible()
     expect(screen.queryByRole('region', { name: 'Prepare selected image' })).not.toBeInTheDocument()
   })
