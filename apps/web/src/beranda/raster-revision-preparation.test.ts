@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/require-await */
 import { describe, expect, it, vi } from 'vitest'
 
 import { prepareExistingRasterRevision } from './raster-revision-preparation'
@@ -9,10 +10,10 @@ const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xd9])
 class FileNode {
   content: BlobPart
   constructor(content: BlobPart, private readonly name: string) { this.content = content }
-  getFile(): Promise<File> { return new File([this.content], this.name) }
-  createWritable() {
+  async getFile(): Promise<File> { return new File([this.content], this.name) }
+  async createWritable() {
     return {
-      write: (value: BlobPart) => { this.content = value; return Promise.resolve() },
+      write: async (value: BlobPart) => { this.content = value },
       close: async (): Promise<void> => {},
     }
   }
@@ -21,7 +22,7 @@ class FileNode {
 class Directory {
   files = new Map<string, FileNode>()
   directories = new Map<string, Directory>()
-  getDirectoryHandle(name: string, options?: { create?: boolean }): Promise<Directory> {
+  async getDirectoryHandle(name: string, options?: { create?: boolean }): Promise<Directory> {
     const found = this.directories.get(name)
     if (found) return found
     if (!options?.create) throw new DOMException('missing', 'NotFoundError')
@@ -29,7 +30,7 @@ class Directory {
     this.directories.set(name, created)
     return created
   }
-  getFileHandle(name: string, options?: { create?: boolean }): Promise<FileNode> {
+  async getFileHandle(name: string, options?: { create?: boolean }): Promise<FileNode> {
     const found = this.files.get(name)
     if (found) return found
     if (!options?.create) throw new DOMException('missing', 'NotFoundError')
@@ -62,7 +63,7 @@ function fixture() {
   return { manifest, snapshot, root, asset }
 }
 
-const encode4Mp = vi.fn(() => ({
+const encode4Mp = vi.fn(async () => ({
   bytes: JPEG,
   width: 2000,
   height: 2000,
@@ -92,7 +93,7 @@ describe('prepareExistingRasterRevision', () => {
       assetId: ASSET,
       sourceRevision: 1,
       quality: 0.92,
-      encodeJpeg: () => ({ bytes: JPEG, width: 1999, height: 2000, alphaHandling: 'none', colorConversion: 'browser-canvas-to-srgb' }),
+      encodeJpeg: async () => ({ bytes: JPEG, width: 1999, height: 2000, alphaHandling: 'none', colorConversion: 'browser-canvas-to-srgb' }),
     })).rejects.toThrow(/at least 4 megapixels/)
 
     expect(asset.directories.size).toBe(0)
