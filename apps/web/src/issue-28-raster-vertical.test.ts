@@ -6,6 +6,7 @@ import { evaluateApprovalGate } from './approval-gate'
 import { resolveApprovalSubmission } from './approval-submission'
 import { saveApproval } from './approval-store'
 import { recordGeneratedRevision } from './beranda/generated-revision-store'
+import { prepareExistingRasterRevision } from './beranda/raster-revision-preparation'
 import { loadDurableAudit } from './durable-audit-store'
 import { resolveExportPackageCandidate, validateExportManifest, writeExportPackage } from './export-package'
 import { resolveMasterSelection, saveMasterSelection } from './master-selection-store'
@@ -149,32 +150,42 @@ async function setupGeneratedApprovedFlow() {
     manifestSnapshot,
     persistedSession: { session, snapshot: 'creative-session', checksum: 'b'.repeat(64) },
     jobId: 'job-28-approved',
-    artifact: { id: 'artifact-28-approved', media_type: 'image/jpeg', size_bytes: JPEG.byteLength, sha256: JPEG_SHA256 },
-    fetchArtifact: async () => ({ bytes: JPEG, sha256Header: JPEG_SHA256 }),
+    artifact: { id: 'artifact-28-approved', media_type: 'image/png', size_bytes: PNG.byteLength, sha256: '4c4b6a3be1314ab86138bef4314dde022e600960d8689a2c8f8631802d20dab6' },
+    fetchArtifact: async () => ({ bytes: PNG, sha256Header: '4c4b6a3be1314ab86138bef4314dde022e600960d8689a2c8f8631802d20dab6' }),
     saveSidecar: async () => ({ session, snapshot: 'creative-session-next', checksum: 'c'.repeat(64) }),
     publishManifest: async (next) => {
       published = next
       ;(await root.getFileHandle('gandiwa-project.json')).content = JSON.stringify(next)
     },
   })
+  const generatedSnapshot = await snapshot(root)
+  const prepared = await prepareExistingRasterRevision({
+    directory: root,
+    manifest: published,
+    manifestSnapshot: generatedSnapshot,
+    assetId: GENERATED_ID,
+    sourceRevision: 1,
+    quality: 0.92,
+    encodeJpeg: async () => ({ bytes: JPEG, width: 2000, height: 2000, alphaHandling: 'none', colorConversion: 'browser-canvas-to-srgb' }),
+  })
+  published = prepared.manifest
+  ;(await root.getFileHandle('gandiwa-project.json')).content = JSON.stringify(published)
   const publishedSnapshot = await snapshot(root)
-  const revisionDirectory = await (await root.getDirectoryHandle('revisions')).getDirectoryHandle(GENERATED_ID)
-  ;(await revisionDirectory.getFileHandle('preparation.json', { create: true })).content = JSON.stringify({ submission_checksum: JPEG_SHA256 })
   const metadata = await saveStockMetadata({
     directory: root, manifestSnapshot: publishedSnapshot, assetId: GENERATED_ID,
     provenance: { contentType: 'illustration', creationMethod: 'generative_ai' }, metadata: generatedMetadata, sidecarSnapshot: undefined,
   })
-  const audit = await runRevisionAudit({ directory: root, manifestSnapshot: publishedSnapshot, assetId: GENERATED_ID, revision: 1, fetchImpl: rasterFetch('pass'), now: () => '2026-10-01T00:00:03.000Z' })
-  const masterRecord = await resolveMasterSelection({ directory: root, manifestSnapshot: publishedSnapshot, assetId: GENERATED_ID, revision: 1, selectedAt: '2026-10-01T00:00:04.000Z', selectedBy: 'Master Peng' })
+  const audit = await runRevisionAudit({ directory: root, manifestSnapshot: publishedSnapshot, assetId: GENERATED_ID, revision: 2, fetchImpl: rasterFetch('pass'), now: () => '2026-10-01T00:00:03.000Z' })
+  const masterRecord = await resolveMasterSelection({ directory: root, manifestSnapshot: publishedSnapshot, assetId: GENERATED_ID, revision: 2, selectedAt: '2026-10-01T00:00:04.000Z', selectedBy: 'Master Peng' })
   const master = await saveMasterSelection({ directory: root, manifestSnapshot: publishedSnapshot, record: masterRecord })
-  const submission = await resolveApprovalSubmission({ directory: root, manifest: published, manifestSnapshot: publishedSnapshot, assetId: GENERATED_ID, revision: 1 })
+  const submission = await resolveApprovalSubmission({ directory: root, manifest: published, manifestSnapshot: publishedSnapshot, assetId: GENERATED_ID, revision: 2 })
   const approvalRecord = {
-    schemaVersion: 1 as const, status: 'APPROVED' as const, assetId: GENERATED_ID, revision: 1,
+    schemaVersion: 1 as const, status: 'APPROVED' as const, assetId: GENERATED_ID, revision: 2,
     submissionChecksum: submission.submissionChecksum, metadataChecksum: metadata.checksum, auditChecksum: audit.checksum,
     rulesetId: audit.audit.rulesetId, rulesetVersion: audit.audit.rulesetVersion, approvedAt: '2026-10-01T00:00:05.000Z', statementVersion: 1 as const,
   }
   await saveApproval({ directory: root, manifestSnapshot: publishedSnapshot, metadataSnapshot: metadata.snapshot, auditSnapshot: audit.snapshot, masterSelectionSnapshot: master.snapshot, record: approvalRecord })
-  return { root, published, publishedSnapshot, outcome, metadata, audit }
+  return { root, published, publishedSnapshot, outcome, metadata, audit, preparedRevision: prepared.revision }
 }
 
 describe('Issue 28 raster verticals', () => {
@@ -306,22 +317,27 @@ describe('Issue 28 raster verticals', () => {
     expect(await bytes(root, `revisions/${GENERATED_ID}/rev-1.jpeg`)).toEqual(JPEG)
   })
 
-  it('exports a generated illustration only after disclosure-backed metadata, PASS audit, master selection, and current approval', async () => {
-    const { root, published, publishedSnapshot, outcome } = await setupGeneratedApprovedFlow()
+  it('exports a generated PNG only after it is prepared as JPEG, audited, approved, and re-verified at export boundaries', async () => {
+    const { root, published, publishedSnapshot, outcome, preparedRevision } = await setupGeneratedApprovedFlow()
 
-    const candidate = await resolveExportPackageCandidate({ directory: root as never, manifest: published, manifestSnapshot: publishedSnapshot, assetId: GENERATED_ID, revision: 1 })
-    const exported = await writeExportPackage({ directory: root as never, candidate, verifyCurrentEvidence: async () => undefined })
+    const candidate = await resolveExportPackageCandidate({ directory: root as never, manifest: published, manifestSnapshot: publishedSnapshot, assetId: GENERATED_ID, revision: preparedRevision })
+    const verifyCurrentEvidence = async () => {
+      const fresh = await resolveExportPackageCandidate({ directory: root as never, manifest: published, manifestSnapshot: publishedSnapshot, assetId: GENERATED_ID, revision: preparedRevision })
+      expect(fresh).toMatchObject({ assetId: candidate.assetId, revision: candidate.revision, submissionChecksum: candidate.submissionChecksum, metadataChecksum: candidate.metadataChecksum, auditChecksum: candidate.auditChecksum, approvalChecksum: candidate.approvalChecksum })
+    }
+    const exported = await writeExportPackage({ directory: root as never, candidate, verifyCurrentEvidence })
     const exportManifest = JSON.parse(new TextDecoder().decode(await bytes(root, `exports/${exported.packageName}/export-manifest.json`)))
 
     expect(outcome.manifest.assets[0]).toMatchObject({ content_type: 'illustration', creation_method: 'generative_ai' })
     expect(candidate.gate).toMatchObject({ status: 'APPROVED / ADOBE-READY', exportGate: 'CLEAR' })
     expect(candidate.submissionBytes).toEqual(JPEG)
-    expect(await bytes(root, `revisions/${GENERATED_ID}/rev-1.jpeg`)).toEqual(JPEG)
-    expect(validateExportManifest(exportManifest)).toMatchObject({ assetId: GENERATED_ID, revision: 1, submissionFormat: 'jpeg' })
+    expect(await bytes(root, `revisions/${GENERATED_ID}/rev-1.png`)).toEqual(PNG)
+    expect(await bytes(root, `revisions/${GENERATED_ID}/${preparedRevision}/master.jpeg`)).toEqual(JPEG)
+    expect(validateExportManifest(exportManifest)).toMatchObject({ assetId: GENERATED_ID, revision: preparedRevision, submissionFormat: 'jpeg' })
   })
 
   it('blocks generated export when metadata changes after approval, making the approval stale', async () => {
-    const { root, published, publishedSnapshot, metadata, audit } = await setupGeneratedApprovedFlow()
+    const { root, published, publishedSnapshot, metadata, audit, preparedRevision } = await setupGeneratedApprovedFlow()
     const changedMetadata = { ...generatedMetadata, title: 'Golden cat in morning light' }
     await saveStockMetadata({
       directory: root, manifestSnapshot: publishedSnapshot, assetId: GENERATED_ID,
@@ -329,20 +345,20 @@ describe('Issue 28 raster verticals', () => {
       metadata: changedMetadata, sidecarSnapshot: metadata.snapshot,
     })
     await runRevisionAudit({
-      directory: root, manifestSnapshot: publishedSnapshot, assetId: GENERATED_ID, revision: 1,
+      directory: root, manifestSnapshot: publishedSnapshot, assetId: GENERATED_ID, revision: preparedRevision,
       previousAuditSnapshot: audit.snapshot, fetchImpl: rasterFetch('pass'), now: () => '2026-10-01T00:00:06.000Z',
     })
 
-    await expect(resolveExportPackageCandidate({ directory: root as never, manifest: published, manifestSnapshot: publishedSnapshot, assetId: GENERATED_ID, revision: 1 }))
+    await expect(resolveExportPackageCandidate({ directory: root as never, manifest: published, manifestSnapshot: publishedSnapshot, assetId: GENERATED_ID, revision: preparedRevision }))
       .rejects.toThrow(/export is blocked: Existing approval is stale/)
   })
 
   it('blocks generated export when the durable audit snapshot becomes invalid after approval', async () => {
-    const { root, published, publishedSnapshot } = await setupGeneratedApprovedFlow()
+    const { root, published, publishedSnapshot, preparedRevision } = await setupGeneratedApprovedFlow()
     const audits = await (await root.getDirectoryHandle('reports')).getDirectoryHandle('audits')
-    ;(await audits.getFileHandle(`${GENERATED_ID}-r1.json`)).content = JSON.stringify({ schemaVersion: 1 })
+    ;(await audits.getFileHandle(`${GENERATED_ID}-r${preparedRevision}.json`)).content = JSON.stringify({ schemaVersion: 1 })
 
-    await expect(resolveExportPackageCandidate({ directory: root as never, manifest: published, manifestSnapshot: publishedSnapshot, assetId: GENERATED_ID, revision: 1 }))
+    await expect(resolveExportPackageCandidate({ directory: root as never, manifest: published, manifestSnapshot: publishedSnapshot, assetId: GENERATED_ID, revision: preparedRevision }))
       .rejects.toThrow(/audit snapshot is invalid/)
   })
 })

@@ -85,12 +85,13 @@ boundary is deterministic local artifact/preflight input; preparation,
 metadata, audit persistence, master selection, approval persistence, export
 resolution, and package writing are production code.
 
-1. **Generated success:** a generated JPEG revision receives disclosure-backed
-   `generative_ai` metadata, a durable PASS audit, selected master, and current
-   human approval. `resolveExportPackageCandidate` returns
-   `APPROVED / ADOBE-READY` with `exportGate: CLEAR`; `writeExportPackage`
-   writes the package and its `export-manifest.json` passes
-   `validateExportManifest`.
+1. **Generated success:** a generated PNG candidate revision is preserved, then
+   production preparation creates a separate JPEG prepared revision. That JPEG
+   receives disclosure-backed `generative_ai` metadata, a durable PASS audit,
+   selected master, and current human approval. `resolveExportPackageCandidate`
+   returns `APPROVED / ADOBE-READY` with `exportGate: CLEAR`;
+   `writeExportPackage` writes the package and its `export-manifest.json`
+   passes `validateExportManifest`.
 2. **Stale approval:** after approval, metadata is changed and a new durable
    audit is recorded. The existing approval no longer matches the evidence and
    the fresh export resolver rejects with `Existing approval is stale`.
