@@ -560,7 +560,7 @@ describe('App shell', () => {
     expect(dialog).toHaveTextContent('Burung Senja')
     const reload = screen.getByRole('button', { name: 'Reload external manifest' })
     expect(reload).toBeVisible()
-    expect(reload).toHaveFocus()
+    await waitFor(() => expect(reload).toHaveFocus())
     expect(screen.getByRole('button', { name: 'Save current manifest as copy' })).toBeVisible()
     const cancel = screen.getByRole('button', { name: 'Cancel external change decision' })
     expect(cancel).toBeVisible()
