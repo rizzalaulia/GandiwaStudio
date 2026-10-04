@@ -26,6 +26,8 @@ import { buildApprovedCreativeJob } from './creative-session-adapter'
 import { dispatchApprovedCreativeJob, monitorCreativeJobToRevision } from './creative-dispatch-controller'
 import { fetchCreativeJob, downloadCreativeArtifact, cancelCreativeJob } from './creative-job-client'
 import { recordGeneratedRevision } from './generated-revision-store'
+import { browserEncodeJpeg } from '../raster-preparation'
+import { prepareExistingRasterRevision } from './raster-revision-preparation'
 import { loadCreativeSession, saveCreativeSession, type CreativeSessionDirectory } from '../creative-session-store'
 import { validateProjectManifest } from '@gandiwa/contracts'
 import {
@@ -402,6 +404,8 @@ export function BerandaApp() {
   const [projectRevisions, setProjectRevisions] = useState<ReadonlyArray<RevisionHistoryEntry>>([])
   const [selectedRevisionKey, setSelectedRevisionKey] = useState<string | null>(null)
   const [masterRevisionKey, setMasterRevisionKey] = useState<string | null>(null)
+  const [preparationBusy, setPreparationBusy] = useState(false)
+  const [preparationMessage, setPreparationMessage] = useState<string | null>(null)
   const [masterSelectionSnapshot, setMasterSelectionSnapshot] = useState<string | undefined>(undefined)
   const [masterSelectionBusy, setMasterSelectionBusy] = useState(false)
   const [masterSelectionMessage, setMasterSelectionMessage] = useState<string | null>(null)
@@ -809,6 +813,46 @@ export function BerandaApp() {
       }))
     }
   }, [activeJobId, cancelRequested])
+
+  const handlePrepareSelectedRaster = useCallback(async () => {
+    if (selectedRevisionKey === null || projectDirectory === null || projectManifestSnapshot === null) return
+    const entry = projectRevisions.find((candidate) => `${candidate.assetId}/${candidate.revision}` === selectedRevisionKey)
+    if (!entry) return
+    setPreparationBusy(true)
+    setPreparationMessage(null)
+    try {
+      if (!(await requestProjectWritePermission(projectDirectory))) throw new Error('Izin tulis tidak diberikan. JPEG tidak disiapkan.')
+      const manifest = validateProjectManifest(JSON.parse(projectManifestSnapshot))
+      const prepared = await prepareExistingRasterRevision({
+        directory: projectDirectory as never,
+        manifest,
+        manifestSnapshot: projectManifestSnapshot,
+        assetId: entry.assetId,
+        sourceRevision: entry.revision,
+        quality: 0.92,
+        encodeJpeg: browserEncodeJpeg,
+      })
+      await writeProjectManifestAtomically(projectDirectory as unknown as Parameters<typeof writeProjectManifestAtomically>[0], prepared.manifest)
+      const nextSnapshot = `${JSON.stringify(prepared.manifest, null, 2)}\n`
+      const { history, latestAssetId } = revisionHistoryFromSnapshot(nextSnapshot)
+      setProjectManifestSnapshot(nextSnapshot)
+      setPublishedManifest(prepared.manifest)
+      setProjectRevisions(history)
+      setActiveAssetId(latestAssetId ?? entry.assetId)
+      setSelectedRevisionKey(`${entry.assetId}/${prepared.revision}`)
+      setMasterRevisionKey(null)
+      setMasterSelectionSnapshot(undefined)
+      setLoadedMetadata(null)
+      setAuditSnapshot(undefined)
+      setDurableAudit(null)
+      setAuditLifecycle('STALE')
+      setPreparationMessage(`JPEG rev-${prepared.revision} siap untuk audit. Kandidat asli rev-${entry.revision} tetap tersimpan.`)
+    } catch (error) {
+      setPreparationMessage(error instanceof Error ? error.message : 'JPEG tidak dapat disiapkan.')
+    } finally {
+      setPreparationBusy(false)
+    }
+  }, [projectDirectory, projectManifestSnapshot, projectRevisions, selectedRevisionKey])
 
   const handleSetMasterRevision = useCallback(async () => {
     if (selectedRevisionKey === null || projectDirectory === null || projectManifestSnapshot === null) return
@@ -1503,14 +1547,23 @@ export function BerandaApp() {
               </div>
             )}
             <div className="beranda-master-selection">
-              <p className="beranda-note">Tombol ini aktif setelah ada minimal satu hasil generate: pilih revisi, lalu kunci sebagai master.</p>
+              <p className="beranda-note">Kandidat asli tetap dapat diambil. Siapkan JPEG dahulu; hanya revisi JPEG yang boleh dikunci sebagai master audit/export.</p>
+              <button
+                type="button"
+                className="beranda-toolbar-button"
+                disabled={selectedRevisionKey === null || preparationBusy}
+                onClick={() => void handlePrepareSelectedRaster()}
+              >
+                {preparationBusy ? 'Menyiapkan JPEG…' : 'Siapkan JPEG untuk audit'}
+              </button>
+              {preparationMessage && <p role="status" className="beranda-note">{preparationMessage}</p>}
               <button
                 type="button"
                 className="beranda-primary"
-                disabled={selectedRevisionKey === null || masterSelectionBusy}
+                disabled={selectedRevisionKey === null || masterSelectionBusy || !projectRevisions.some((entry) => `${entry.assetId}/${entry.revision}` === selectedRevisionKey && entry.relativePath.endsWith('/master.jpeg'))}
                 onClick={() => void handleSetMasterRevision()}
               >
-                {masterSelectionBusy ? 'Locking master…' : 'Lock this image as master'}
+                {masterSelectionBusy ? 'Locking master…' : 'Lock prepared JPEG as master'}
               </button>
               <p role="status" aria-label="Master revisi">
                 {masterSelectionMessage ?? (masterRevisionKey === null

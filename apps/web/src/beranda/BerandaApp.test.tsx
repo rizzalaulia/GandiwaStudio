@@ -1,5 +1,16 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// Only the JPEG encoder stays stubbed: it is a browser-canvas boundary
+// (createImageBitmap + canvas.toBlob) with no deterministic test double.
+// The REAL prepare pipeline and the REAL master-selection store run against
+// the durable fake filesystem, so publish, reopen, metadata, and audit all
+// exercise production code paths and their fail-closed gates.
+const rasterBoundary = vi.hoisted(() => ({ browserEncodeJpeg: vi.fn() }))
+vi.mock('../raster-preparation', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../raster-preparation')>(),
+  browserEncodeJpeg: rasterBoundary.browserEncodeJpeg,
+}))
 
 import { BerandaApp } from './BerandaApp'
 
@@ -102,34 +113,66 @@ let createdSidecar = false
 
 function fakeProjectDirectory(overrides: { manifestText?: string } = {}): unknown {
   const manifestText = overrides.manifestText ?? MANIFEST_TEXT
-  const revisionNames = new Set<string>()
+  // Durable revision storage keyed by full relative path. Seeded from the
+  // initial manifest so generated candidates stay readable; the real prepare
+  // path lands master.jpeg + preparation.json here for new revisions, and the
+  // real master-selection store re-reads those bytes for its checksum gate.
+  const revisionFiles = new Map<string, Uint8Array<ArrayBuffer>>()
+  const revisionDirs = new Set<string>()
   try {
     const parsed = JSON.parse(manifestText) as { assets?: Array<{ revisions?: Array<{ relative_path?: string }> }> }
     for (const asset of parsed.assets ?? []) {
       for (const revision of asset.revisions ?? []) {
-        const name = revision.relative_path?.split('/').at(-1)
-        if (name) revisionNames.add(name)
+        const relativePath = revision.relative_path
+        if (!relativePath) continue
+        revisionFiles.set(relativePath, new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]))
+        const segments = relativePath.split('/')
+        segments.pop()
+        revisionDirs.add(segments.join('/'))
       }
     }
   } catch {
     // Invalid-manifest tests intentionally keep revision storage empty.
   }
-  const revisionBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4])
+  // Durable manifest: publish (tmp write + overwrite + tmp removal) commits
+  // on close(), mirroring File System Access semantics. Later reads —
+  // including after a UI reopen — observe the newest published manifest, so
+  // the fail-closed gates compare against a truthful filesystem instead of
+  // the fixture's initial text. The gates themselves are untouched.
+  let publishedManifestText: string | undefined
+  const currentManifestText = () => publishedManifestText ?? manifestText
+  const toBytes = (value: unknown): Uint8Array<ArrayBuffer> => {
+    if (typeof value === 'string') return new TextEncoder().encode(value)
+    const view = value instanceof ArrayBuffer ? new Uint8Array(value)
+      : value instanceof Uint8Array ? value
+      : null
+    if (!view) return new Uint8Array()
+    const copy = new Uint8Array(view.byteLength)
+    copy.set(view)
+    return copy
+  }
   let masterSelectionText: string | undefined
   let metadataText: string | undefined
   let auditText: string | undefined
   return {
     getFileHandle: (name: string, options?: { create?: boolean }) => {
       if (name === 'gandiwa-project.json' && options?.create !== true) {
-        return Promise.resolve({ getFile: () => Promise.resolve({ text: () => Promise.resolve(manifestText) }) })
+        return Promise.resolve({ getFile: () => Promise.resolve({ text: () => Promise.resolve(currentManifestText()) }) })
       }
       if (options?.create === true) {
-        // Writes (tmp manifest + final manifest overwrite + revision files).
+        // Writes (tmp manifest + final manifest overwrite). Only the real
+        // manifest name commits; the tmp file is removed right after.
+        let staged: Uint8Array<ArrayBuffer> | undefined
         return Promise.resolve({
-          getFile: () => Promise.resolve({ text: () => Promise.resolve(manifestText) }),
+          getFile: () => Promise.resolve({ text: () => Promise.resolve(currentManifestText()) }),
           createWritable: () => Promise.resolve({
-            write: () => Promise.resolve(),
-            close: () => Promise.resolve(),
+            write: (value: unknown) => { staged = toBytes(value); return Promise.resolve() },
+            close: () => {
+              if (name === 'gandiwa-project.json' && staged !== undefined) {
+                publishedManifestText = new TextDecoder().decode(staged)
+              }
+              return Promise.resolve()
+            },
           }),
         })
       }
@@ -138,26 +181,58 @@ function fakeProjectDirectory(overrides: { manifestText?: string } = {}): unknow
     getDirectoryHandle: (name: string) => {
       if (name === 'revisions') {
         return Promise.resolve({
-          getDirectoryHandle: () => Promise.resolve({
-            getFileHandle: (fileName: string, options?: { create?: boolean }) => {
+          getDirectoryHandle: (assetId: string) => Promise.resolve({
+            getDirectoryHandle: (revision: string, options?: { create?: boolean }) => {
+              const dirKey = `revisions/${assetId}/${revision}`
+              const dirExists = revisionDirs.has(dirKey) || [...revisionFiles.keys()].some((key) => key.startsWith(`${dirKey}/`))
               if (options?.create === true) {
+                revisionDirs.add(dirKey)
+              } else if (!dirExists) {
+                return Promise.reject(new DOMException('missing', 'NotFoundError'))
+              }
+              return Promise.resolve({
+                getFileHandle: (fileName: string, options?: { create?: boolean }) => {
+                  const key = `${dirKey}/${fileName}`
+                  const found = revisionFiles.get(key)
+                  if (found !== undefined) {
+                    const bytes = found
+                    return Promise.resolve({
+                      getFile: () => Promise.resolve(new File([bytes], fileName, { type: fileName.endsWith('.json') ? 'application/json' : 'image/jpeg' })),
+                    })
+                  }
+                  if (options?.create !== true) return Promise.reject(new DOMException('missing', 'NotFoundError'))
+                  let staged: Uint8Array<ArrayBuffer> | undefined
+                  return Promise.resolve({
+                    getFile: () => Promise.resolve(new File([staged ?? new Uint8Array()], fileName)),
+                    createWritable: () => Promise.resolve({
+                      write: (value: unknown) => { staged = toBytes(value); return Promise.resolve() },
+                      close: () => { if (staged !== undefined) revisionFiles.set(key, staged); return Promise.resolve() },
+                    }),
+                  })
+                },
+              })
+            },
+            // Seeded candidate files live directly under the asset directory
+            // (e.g. revisions/<assetId>/rev-1.png). New files (e.g. a
+            // dispatched job's rev-N.png) are created durably via {create:true}.
+            getFileHandle: (fileName: string, options?: { create?: boolean }) => {
+              const key = `revisions/${assetId}/${fileName}`
+              const found = revisionFiles.get(key)
+              if (found !== undefined) {
+                const bytes = found
                 return Promise.resolve({
-                  createWritable: () => Promise.resolve({
-                    write: () => Promise.resolve(),
-                    close: () => Promise.resolve(),
-                  }),
+                  getFile: () => Promise.resolve(new File([bytes], fileName, { type: 'image/png' })),
                 })
               }
-              if (revisionNames.has(fileName)) {
-                return Promise.resolve({
-                  getFile: () => Promise.resolve({
-                    type: 'image/png',
-                    text: () => Promise.resolve(''),
-                    arrayBuffer: () => Promise.resolve(revisionBytes.slice().buffer),
-                  }),
-                })
-              }
-              return Promise.reject(new DOMException('missing', 'NotFoundError'))
+              if (options?.create !== true) return Promise.reject(new DOMException('missing', 'NotFoundError'))
+              let staged: Uint8Array<ArrayBuffer> | undefined
+              return Promise.resolve({
+                getFile: () => Promise.resolve(new File([staged ?? new Uint8Array()], fileName)),
+                createWritable: () => Promise.resolve({
+                  write: (value: unknown) => { staged = toBytes(value); return Promise.resolve() },
+                  close: () => { if (staged !== undefined) revisionFiles.set(key, staged); return Promise.resolve() },
+                }),
+              })
             },
           }),
         })
@@ -265,6 +340,19 @@ function fakeProjectDirectory(overrides: { manifestText?: string } = {}): unknow
 // the real merge path in status-client.ts.
 
 describe('Beranda — meja kerja studio', () => {
+  beforeEach(() => {
+    // Deterministic 4MP JPEG out of the browser boundary. Everything
+    // downstream — prepare gates, revision file writes, manifest publish,
+    // master lock — is production code against the durable fake filesystem.
+    rasterBoundary.browserEncodeJpeg.mockImplementation(() => ({
+      bytes: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]),
+      width: 2000,
+      height: 2000,
+      alphaHandling: 'none' as const,
+      colorConversion: 'browser-canvas-to-srgb' as const,
+    }))
+  })
+
   afterEach(() => {
     cleanup()
     vi.unstubAllGlobals()
@@ -439,16 +527,23 @@ describe('Beranda — meja kerja studio', () => {
     const rev1 = screen.getByRole('option', { name: /rev-1/ })
     const rev2 = screen.getByRole('option', { name: /rev-2/ })
     fireEvent.click(rev1)
-    fireEvent.click(screen.getByRole('button', { name: 'Lock this image as master' }))
-    await waitFor(() => expect(screen.getByRole('status', { name: 'Master revisi' })).toHaveTextContent('rev-1'))
+    fireEvent.click(screen.getByRole('button', { name: 'Siapkan JPEG untuk audit' }))
+    await waitFor(() => expect(screen.getByText('JPEG rev-3 siap untuk audit. Kandidat asli rev-1 tetap tersimpan.')).toBeInTheDocument())
+    const prepared = screen.getByRole('option', { name: /rev-3/ })
+    expect(rasterBoundary.browserEncodeJpeg).toHaveBeenCalledWith(expect.any(File), 0.92)
+    expect(rev1).toBeInTheDocument()
+    fireEvent.click(prepared)
+    fireEvent.click(screen.getByRole('button', { name: 'Lock prepared JPEG as master' }))
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Master revisi' })).toHaveTextContent('rev-3'))
     expect(screen.getByRole('status', { name: 'Master revisi' })).toHaveTextContent('tersimpan')
-    expect(rev1).toHaveAttribute('data-master', 'true')
+    expect(rev1).toHaveAttribute('data-master', 'false')
     expect(rev2).toHaveAttribute('data-master', 'false')
+    expect(prepared).toHaveAttribute('data-master', 'true')
 
     // Memilih kandidat lain sesudah lock tidak boleh mengganti identitas kerja Prepare.
     fireEvent.click(rev2)
     fireEvent.click(screen.getByRole('button', { name: 'Prepare this image' }))
-    expect(screen.getByTestId('prepare-master-stage')).toHaveAttribute('data-master-revision', expect.stringMatching(/\/1$/))
+    expect(screen.getByTestId('prepare-master-stage')).toHaveAttribute('data-master-revision', expect.stringMatching(/\/3$/))
     expect(screen.getByRole('button', { name: 'Download ready, belum tersedia' })).toBeDisabled()
     fireEvent.click(screen.getByRole('checkbox', { name: /I reviewed the title/ }))
     expect(screen.getByRole('button', { name: 'Download ready, belum tersedia' })).toBeDisabled()
@@ -456,8 +551,9 @@ describe('Beranda — meja kerja studio', () => {
     firstMount.unmount()
     render(<BerandaApp />)
     fireEvent.click(screen.getByRole('button', { name: 'Buka proyek' }))
-    await waitFor(() => expect(screen.getByRole('status', { name: 'Master revisi' })).toHaveTextContent(/rev-1.*tersimpan/))
-    expect(screen.getByRole('option', { name: /rev-1/ })).toHaveAttribute('data-master', 'true')
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Master revisi' })).toHaveTextContent(/rev-3.*tersimpan/))
+    expect(screen.getByRole('option', { name: /rev-3/ })).toHaveAttribute('data-master', 'true')
+    expect(screen.getByRole('option', { name: /rev-1/ })).toHaveAttribute('data-master', 'false')
   })
 
   it('improves generate continuity by preselecting the latest asset revision after reopen', async () => {
@@ -708,8 +804,11 @@ describe('Beranda — meja kerja studio', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Buka proyek' }))
     await waitFor(() => expect(screen.getByRole('toolbar')).toHaveTextContent('dibuka secara lokal'))
     fireEvent.click(screen.getByRole('option', { name: /rev-1/ }))
-    fireEvent.click(screen.getByRole('button', { name: 'Lock this image as master' }))
-    await waitFor(() => expect(screen.getByRole('status', { name: 'Master revisi' })).toHaveTextContent('rev-1'))
+    fireEvent.click(screen.getByRole('button', { name: 'Siapkan JPEG untuk audit' }))
+    await waitFor(() => expect(screen.getByRole('option', { name: /rev-2/ })).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('option', { name: /rev-2/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Lock prepared JPEG as master' }))
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Master revisi' })).toHaveTextContent('rev-2'))
     fireEvent.click(screen.getByRole('button', { name: 'Prepare this image' }))
 
     fireEvent.change(screen.getByLabelText('Judul'), { target: { value: 'Ceramic cup with soft studio light' } })
@@ -731,7 +830,7 @@ describe('Beranda — meja kerja studio', () => {
     render(<BerandaApp />)
     fireEvent.click(screen.getByRole('button', { name: 'Buka proyek' }))
     await waitFor(() => expect(screen.getByRole('toolbar')).toHaveTextContent('dibuka secara lokal'))
-    await waitFor(() => expect(screen.getByRole('status', { name: 'Master revisi' })).toHaveTextContent('Master: rev-1'))
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Master revisi' })).toHaveTextContent('Master: rev-2'))
     fireEvent.click(screen.getByRole('button', { name: 'Prepare this image' }))
     const reopenedAudit = screen.getByRole('region', { name: 'Audit revisi aktif' })
     await waitFor(() => expect(reopenedAudit).toHaveTextContent('FAIL'))
@@ -794,8 +893,11 @@ describe('Beranda — meja kerja studio', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Buka proyek' }))
     await waitFor(() => expect(screen.getByRole('toolbar')).toHaveTextContent('dibuka secara lokal'))
     fireEvent.click(screen.getByRole('option', { name: /rev-1/ }))
-    fireEvent.click(screen.getByRole('button', { name: 'Lock this image as master' }))
-    await waitFor(() => expect(screen.getByRole('status', { name: 'Master revisi' })).toHaveTextContent('rev-1'))
+    fireEvent.click(screen.getByRole('button', { name: 'Siapkan JPEG untuk audit' }))
+    await waitFor(() => expect(screen.getByRole('option', { name: /rev-2/ })).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('option', { name: /rev-2/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Lock prepared JPEG as master' }))
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Master revisi' })).toHaveTextContent('rev-2'))
     fireEvent.click(screen.getByRole('button', { name: 'Prepare this image' }))
 
     // Metadata must exist before audit may run (audit binds metadata).
@@ -841,8 +943,8 @@ describe('Beranda — alur rev3 Create → Prepare', () => {
     expect(screen.getByRole('button', { name: 'Create' })).toHaveAttribute('aria-current', 'page')
     expect(screen.getByRole('button', { name: 'Prepare' })).not.toHaveAttribute('aria-current')
     expect(screen.getByRole('button', { name: 'Prepare this image' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Lock this image as master' })).toBeDisabled()
-    expect(screen.getByText(/minimal satu hasil generate/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Lock prepared JPEG as master' })).toBeDisabled()
+    expect(screen.getByText(/Kandidat asli tetap dapat diambil/)).toBeInTheDocument()
     expect(screen.getByRole('region', { name: 'Create image' })).toBeVisible()
     expect(screen.queryByRole('region', { name: 'Prepare selected image' })).not.toBeInTheDocument()
   })
