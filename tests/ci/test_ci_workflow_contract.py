@@ -7,9 +7,9 @@ policy cannot be satisfied by moving text into a comment or unrelated job.
 
 from __future__ import annotations
 
-from pathlib import Path
 import re
 import unittest
+from pathlib import Path
 
 WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
 PINNED_ACTIONS = {
@@ -99,6 +99,12 @@ class CiWorkflowContractTests(unittest.TestCase):
         self.assertIn(
             "python3 -m unittest tests/ci/test_ci_workflow_contract.py -v",
             job_runs(self.jobs["ci-workflow-contract"]),
+        )
+
+    def test_ci_runs_arm64_production_artifact_contract(self) -> None:
+        self.assertIn(
+            "python3 -m unittest tests/deployment/test_bejo2_production_artifacts.py -v",
+            job_runs(self.jobs["production-artifacts-contract"]),
         )
 
     def test_ci_preserves_repository_verification_and_secret_scan(self) -> None:
