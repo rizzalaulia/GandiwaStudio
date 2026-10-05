@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -40,22 +41,24 @@ class Bejo2ProductionArtifactsContract(unittest.TestCase):
         self.assertIn("USER 10001:10001", text)
 
     def _rendered_compose(self) -> dict[str, dict[str, dict[str, object]]]:
-        env = dict(
-            os.environ,
-            GANDIWA_IMAGE="gandiwa-api:test",
-            GANDIWA_FRONTEND_BUILDER_IMAGE="gandiwa-frontend-builder:test",
-            GANDIWA_UID="10001",
-            GANDIWA_GID="10001",
-        )
-        compose = ["docker-compose"] if shutil.which("docker-compose") else ["docker", "compose"]
-        result = subprocess.run(
-            [*compose, "-f", str(COMPOSE), "--profile", "migration", "--profile", "release", "config", "--no-env-resolution", "--format", "json"],
-            cwd=ROOT,
-            env=env,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
+        with tempfile.NamedTemporaryFile() as environment_file:
+            env = dict(
+                os.environ,
+                GANDIWA_IMAGE="gandiwa-api:test",
+                GANDIWA_FRONTEND_BUILDER_IMAGE="gandiwa-frontend-builder:test",
+                GANDIWA_ENV_FILE=environment_file.name,
+                GANDIWA_UID="10001",
+                GANDIWA_GID="10001",
+            )
+            compose = ["docker-compose"] if shutil.which("docker-compose") else ["docker", "compose"]
+            result = subprocess.run(
+                [*compose, "-f", str(COMPOSE), "--profile", "migration", "--profile", "release", "config", "--no-env-resolution", "--format", "json"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
 
@@ -136,7 +139,13 @@ class Bejo2ProductionArtifactsContract(unittest.TestCase):
         names = set(re.findall(r"\$\{([A-Z0-9_]+)(?::[-?][^}]*)?\}", text))
         self.assertEqual(
             names,
-            {"GANDIWA_IMAGE", "GANDIWA_FRONTEND_BUILDER_IMAGE", "GANDIWA_UID", "GANDIWA_GID"},
+            {
+                "GANDIWA_IMAGE",
+                "GANDIWA_FRONTEND_BUILDER_IMAGE",
+                "GANDIWA_ENV_FILE",
+                "GANDIWA_UID",
+                "GANDIWA_GID",
+            },
         )
 
 

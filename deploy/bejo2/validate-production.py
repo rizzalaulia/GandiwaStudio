@@ -86,28 +86,30 @@ def validate(
         )
     )
 
-    env = dict(
-        os.environ,
-        GANDIWA_IMAGE=image,
-        GANDIWA_FRONTEND_BUILDER_IMAGE=frontend_image,
-        GANDIWA_UID="10001",
-        GANDIWA_GID="10001",
-    )
-    compose = ("docker-compose",) if shutil.which("docker-compose") else ("docker", "compose")
-    rendered = run(
-        *compose,
-        "-f",
-        str(COMPOSE),
-        "--profile",
-        "migration",
-        "--profile",
-        "release",
-        "config",
-        "--no-env-resolution",
-        "--format",
-        "json",
-        env=env,
-    )
+    with tempfile.NamedTemporaryFile() as environment_file:
+        env = dict(
+            os.environ,
+            GANDIWA_IMAGE=image,
+            GANDIWA_FRONTEND_BUILDER_IMAGE=frontend_image,
+            GANDIWA_ENV_FILE=environment_file.name,
+            GANDIWA_UID="10001",
+            GANDIWA_GID="10001",
+        )
+        compose = ("docker-compose",) if shutil.which("docker-compose") else ("docker", "compose")
+        rendered = run(
+            *compose,
+            "-f",
+            str(COMPOSE),
+            "--profile",
+            "migration",
+            "--profile",
+            "release",
+            "config",
+            "--no-env-resolution",
+            "--format",
+            "json",
+            env=env,
+        )
     results.append(check("docker compose config", rendered.returncode == 0, rendered.stderr.strip() or "valid"))
     if rendered.returncode == 0:
         config = json.loads(rendered.stdout)

@@ -4,7 +4,7 @@ x-runtime: &runtime
   image: "${GANDIWA_IMAGE:?set GANDIWA_IMAGE to an immutable image reference}"
   platform: "linux/arm64"
   env_file:
-    - /etc/gandiwa/gandiwa.env
+    - "${GANDIWA_ENV_FILE:-/etc/gandiwa/gandiwa.env}"
   user: "${GANDIWA_UID:-10001}:${GANDIWA_GID:-10001}"
   read_only: true
   init: true
