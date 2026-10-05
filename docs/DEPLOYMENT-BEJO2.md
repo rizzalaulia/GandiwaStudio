@@ -122,6 +122,116 @@ docker inspect gandiwa-api --format '{{.Config.User}} {{.HostConfig.ReadonlyRoot
 Port `8010` must be bound only to `127.0.0.1`. No worker port may be published.
 Uvicorn trusts the bridge proxy headers because Docker NAT does not present host Nginx as container loopback; the host port remains loopback-only and is never exposed publicly.
 
+## Backup, restore, and rollback drill (Issue #31)
+
+Run this drill on a **disposable copy** before a production release. It uses SQLite's
+online backup API, encrypts the archive with AES-256-GCM before writing to the
+operator-provided encrypted off-host destination, and never copies a live WAL database
+file directly. The 32-byte key is an independent root-owned secret (mode `0600`); it is
+not the session secret and is never placed in Git, shell history, Compose, or logs.
+
+Set a release identity to the immutable digest being protected. Retain encrypted bundles
+for the documented recovery window in an encrypted off-host destination. Initial
+operational targets, to revise only from drill evidence: **RPO ≤ 24 hours** (or one
+pre-deploy backup) and **RTO ≤ 60 minutes**. Monitor the age of the newest verified
+manifest and alert before it exceeds 24 hours.
+
+```bash
+export RELEASE_ID='REGISTRY/GandiwaStudio-api@sha256:APPROVED_DIGEST'
+export BACKUP_KEY=/etc/gandiwa/backup.key
+python3 deploy/bejo2/backup-drill.py backup \
+  --database /srv/gandiwa/data/gandiwa.sqlite3 \
+  --artifacts /srv/gandiwa/artifacts \
+  --destination /mnt/encrypted-offhost/gandiwa \
+  --key-file "$BACKUP_KEY" \
+  --release-id "$RELEASE_ID" \
+  --retention-hours 168
+```
+
+Copy both printed bundle paths to the protected off-host destination if it is not already
+mounted there. Record the manifest checksum, release digest, completion time, elapsed
+backup/restore time, and observed artifact count as drill evidence; do not include keys,
+provider secrets, or private artifact contents. Check backup age from a read-only timer or
+monitor (exit `0` fresh, `1` stale, `2` invalid/missing manifest):
+
+```bash
+python3 deploy/bejo2/check-backup-age.py \
+  --directory /mnt/encrypted-offhost/gandiwa \
+  --max-age-hours 24
+```
+
+The monitor reads only manifests; it does not decrypt any archive or access the backup key.
+
+### Restore verification — staging only
+
+Never restore over `/srv/gandiwa` first. Choose a new disposable staging path on the
+same filesystem, verify the archive and its manifest, and reconcile active jobs. The
+reconciliation changes `running`, `waiting_provider`, and `processing` to
+`needs_review` with their remote IDs retained; it performs **zero** provider calls and
+never redispatches an uncertain paid request.
+
+```bash
+python3 deploy/bejo2/backup-drill.py restore-verify \
+  --archive /mnt/encrypted-offhost/gandiwa/BUNDLE.gandiwa \
+  --manifest /mnt/encrypted-offhost/gandiwa/BUNDLE.manifest.json \
+  --key-file "$BACKUP_KEY" \
+  --staging /srv/gandiwa-restore-drill/STAGING \
+  --uid 10001 --gid 10001 \
+  --expected-release-id "$RELEASE_ID" \
+  --expected-revision 0003
+```
+
+The command validates archive/database checksums, every durable artifact path and hash,
+ownership, `PRAGMA quick_check`, `PRAGMA integrity_check`, and the **target** Alembic
+revision before sealing a private HMAC-authenticated receipt. Staging is traversed
+no-follow (every ancestor and member must be an owned real directory/regular file; no
+symlinks). Do not mutate staging after this command: rollback repeats that no-follow
+tree check and rechecks the sealed release ID/revision, database checksum,
+artifact hashes, and integrity immediately before any replacement. Migration failure,
+missing/changed artifact, invalid integrity result, a modified/forged receipt, or a
+`waiting_provider`/`processing` job lacking its required remote ID is a hard stop.
+`running` may lack a remote ID because it can be pre-dispatch; all active jobs become
+`needs_review` and are never redispatched. Reconcile every `needs_review` job manually
+against the provider before resuming intake.
+
+### Data rollback — explicit, service-stopped swap
+
+Code rollback restores the prior immutable API digest and static release. Schema/data
+rollback is **not** `alembic downgrade` by default. It is allowed only from a verified
+staging restore compatible with the code release being returned to service.
+
+1. Stop intake and both API/worker services; verify they are stopped with `docker compose ps`.
+2. Retain the current `/srv/gandiwa/data` and `/srv/gandiwa/artifacts` paths; the command
+   renames them to timestamped `pre-rollback` paths rather than deleting them.
+3. Invoke the same-filesystem directory replacements only after the explicit acknowledgement. Each rename is atomic, but POSIX cannot make the two data/artifact renames one cross-directory transaction; keep services stopped and preserve the timestamped previous paths. If the host fails mid-swap, do not restart services—inspect both current and `pre-rollback` paths, then complete recovery manually from the verified receipt.
+
+```bash
+# The staging path must share the /srv/gandiwa filesystem; the tool rejects a cross-device swap.
+```
+
+4. Invoke the replacement only after the explicit acknowledgement. The tool verifies the
+   sealed receipt with the root-owned backup key and compensates all completed renames if
+   any later rename fails; if compensation fails too, it keeps services stopped and reports
+   the paths requiring manual recovery.
+
+```bash
+python3 deploy/bejo2/backup-drill.py rollback-apply \
+  --staging /srv/gandiwa-restore-drill/STAGING \
+  --data-dir /srv/gandiwa/data \
+  --artifacts-dir /srv/gandiwa/artifacts \
+  --key-file "$BACKUP_KEY" \
+  --expected-release-id "$RELEASE_ID" \
+  --expected-revision 0003 \
+  --uid 10001 --gid 10001 \
+  --services-stopped
+```
+
+5. Start the compatible API/worker release, run the health/readiness check, and execute a
+   synthetic queue job that does not call a paid provider. Keep pre-rollback paths until
+   the observation window completes.
+
 ## Rollback boundary
 
-Code rollback means restoring the prior immutable image digest and prior static frontend artifact. Schema/data rollback is **not** `alembic downgrade` by default; restore the verified Issue #31 backup into an isolated path, validate it, stop API/worker, then perform the documented atomic replacement. Never point old code at a newer schema without a proven compatibility or restore procedure.
+Never point old code at a newer schema without a proven compatibility or restore
+procedure. The verified Issue #31 backup/restore drill above is required before a
+production migration.
