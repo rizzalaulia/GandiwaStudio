@@ -14,9 +14,9 @@ from pathlib import Path
 WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
 PINNED_ACTIONS = {
     "actions/checkout": "3d3c42e5aac5ba805825da76410c181273ba90b1",
-    "actions/setup-node": "249970729cb0ef3589644e2896645e5dc5ba9c38",
-    "actions/setup-python": "ece7cb06caefa5fff74198d8649806c4678c61a1",
-    "astral-sh/setup-uv": "37802adc94f370d6bfd71619e3f0bf239e1f3b78",
+    "actions/setup-node": "820762786026740c76f36085b0efc47a31fe5020",
+    "actions/setup-python": "5fda3b95a4ea91299a34e894583c3862153e4b97",
+    "astral-sh/setup-uv": "c18668ad3cf93ea998bef934396af7bb5c839dc7",
 }
 JOB_PATTERN = re.compile(r"^  ([a-z][a-z-]+):$", re.MULTILINE)
 USES_PATTERN = re.compile(r"^      - uses: (.+)$", re.MULTILINE)
