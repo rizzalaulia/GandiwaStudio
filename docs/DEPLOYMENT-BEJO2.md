@@ -1,209 +1,127 @@
-# Deployment Contract — bejo2-vnic
+# GandiwaStudio production deployment on bejo2
 
-**Target:** `bejo2-vnic`  
-**Tailscale IP:** `100.98.114.115`  
-**Status:** Deployment design locked; application not deployed  
-**Last verified:** 8 September 2026
+This runbook deploys the ARM64 production artifacts from Issue #30. It does **not** authorize changing any existing bejo2 virtual host. Always install Gandiwa as a new, dedicated site and validate the current services before and after the change.
 
-## Host Role
+## Runtime contract
 
-- `bejo1-oracle`: development workspace dan VS Code Remote SSH.
-- `bejo2-vnic`: production host Gandiwa Studio.
+- Architecture: `linux/arm64`.
+- API host exposure: `127.0.0.1:8010` only.
+- Frontend: static releases in `/var/www/gandiwa/releases` with `/var/www/gandiwa/current` as the active symlink; no Node runtime.
+- Durable SQLite: `/srv/gandiwa/data/gandiwa.sqlite3` mounted at `/var/lib/gandiwa/gandiwa.sqlite3`.
+- Durable artifacts: `/srv/gandiwa/artifacts` mounted at `/var/cache/gandiwa`.
+- Runtime identity: numeric UID/GID `10001:10001` by default.
+- Runtime containers are read-only, drop all capabilities, set `no-new-privileges`, use a private PID namespace, and have CPU/RAM/PID limits.
+- The Docker socket is never mounted.
+- Schema migration is an explicit one-shot command; API and worker startup never migrates implicitly.
 
-Source development tidak dilakukan langsung di production. Promotion mengikuti review, commit, CI, release/tag, lalu deployment manual.
+## Build and publish immutable artifacts
 
-## Verified Host Inventory
+On an ARM64 builder or a working multi-platform BuildKit builder:
 
-```text
-OS             Ubuntu 24.04.4 LTS
-Architecture   ARM64 / aarch64
-CPU            1 vCPU
-RAM            5.8 GiB (sekitar 3.7 GiB available saat audit)
-Swap           none
-Root disk       96 GiB (sekitar 92 GiB available saat audit)
-Docker          29.7.2, active
-Docker Compose  5.5.0
-Nginx           active
-SSH             active
+```bash
+docker build --platform linux/arm64 \
+  -f deploy/bejo2/Dockerfile \
+  -t REGISTRY/GandiwaStudio-api:GIT_SHA .
+docker push REGISTRY/GandiwaStudio-api:GIT_SHA
+docker inspect --format '{{.Os}}/{{.Architecture}} {{.Config.User}}' \
+  REGISTRY/GandiwaStudio-api:GIT_SHA
+
+docker build --platform linux/arm64 \
+  -f deploy/bejo2/Dockerfile.frontend \
+  -t REGISTRY/GandiwaStudio-frontend-builder:GIT_SHA .
+docker push REGISTRY/GandiwaStudio-frontend-builder:GIT_SHA
 ```
 
-Existing services occupy:
+The expected output is `linux/arm64 10001:10001`. Prefer setting `GANDIWA_IMAGE` to the registry digest (`...@sha256:...`) at deployment time.
 
-```text
-22       SSH
-80/443   Nginx; existing komputermu.my.id virtual host
-3000     existing application
+Build the static frontend from the same checkout:
+
+```bash
+GANDIWA_IMAGE=unused \
+GANDIWA_FRONTEND_BUILDER_IMAGE='REGISTRY/GandiwaStudio-frontend-builder@sha256:BUILDER_DIGEST' \
+  docker compose -f deploy/bejo2/compose.yaml --profile release run --rm frontend-build
 ```
 
-Gandiwa tidak boleh mengambil port 3000 atau mengganti virtual host `komputermu.my.id`.
+The one-shot builder copies the static output to `/var/www/gandiwa/releases/staging`. Empty that directory before the build, validate its contents, rename it to `/var/www/gandiwa/releases/GIT_SHA`, recreate an empty staging directory, and switch `/var/www/gandiwa/current` atomically only after validation.
 
-## Production Topology
+## Provision host paths and secrets
 
-```text
-Dedicated Gandiwa HTTPS hostname (TBD)
-             │
-             ▼
-Host Nginx :443
-├── /          static frontend
-└── /api/      proxy to 127.0.0.1:8010
-                        │
-                 Docker Compose
-                 ├── api
-                 └── worker (concurrency 1)
-                         │
-                    SQLite + temp artifacts
-                         ├── 9Router over Tailscale
-                         └── fal.ai over internet
+Create host directories once. The owner must match the configured container UID/GID:
+
+```bash
+sudo install -d -o 10001 -g 10001 -m 0750 /srv/gandiwa/data
+sudo install -d -o 10001 -g 10001 -m 0750 /srv/gandiwa/artifacts
+sudo install -d -o 10001 -g 10001 -m 0755 /var/www/gandiwa/releases
+sudo install -d -o 10001 -g 10001 -m 0755 /var/www/gandiwa/releases/staging
+sudo install -d -o root -g root -m 0750 /etc/gandiwa
+sudo install -o root -g root -m 0600 .env.production /etc/gandiwa/gandiwa.env
 ```
 
-A dedicated hostname and certificate must be selected before public/browser production smoke testing. Plain HTTP over a Tailscale IP is not accepted as the production browser origin because File System Access API requires a secure context. Do not alter Tailscale Serve or the existing Nginx TLS configuration until the hostname/access-mode decision is explicit.
+Generate `GANDIWA_SESSION_SECRET` with a cryptographic random source and retain it across restarts; the provider-key store derives its encryption key from that secret. Keep provider API keys out of the Compose file, image layers, Git, and process arguments.
 
-## Filesystem Layout
+## Preflight without changing production
 
-```text
-/opt/gandiwa/source/                 release source/build context
-/opt/gandiwa/current/                active release symlink or active checkout
-/etc/gandiwa/gandiwa.env             production secrets/config (not Git)
-/var/lib/gandiwa/gandiwa.sqlite3     durable database/queue
-/var/cache/gandiwa/artifacts/        temporary artifacts
-/var/www/gandiwa/                    static frontend output
-/etc/nginx/sites-available/gandiwa   dedicated virtual host
+Set the immutable image reference, then run the read-only validator:
+
+```bash
+export GANDIWA_IMAGE='REGISTRY/GandiwaStudio-api@sha256:IMAGE_DIGEST'
+export GANDIWA_FRONTEND_BUILDER_IMAGE='REGISTRY/GandiwaStudio-frontend-builder@sha256:BUILDER_DIGEST'
+python3 deploy/bejo2/validate-production.py \
+  --image "$GANDIWA_IMAGE" \
+  --frontend-image "$GANDIWA_FRONTEND_BUILDER_IMAGE" \
+  --existing-vhost /etc/nginx/sites-enabled/komputermu.my.id \
+  --check-host
 ```
 
-Recommended ownership:
+The validator checks:
 
-```text
-/etc/gandiwa/gandiwa.env   root:gandiwa 0640
-/var/lib/gandiwa           gandiwa:gandiwa
-/var/cache/gandiwa         gandiwa:gandiwa
-/var/www/gandiwa           root:root, readable by Nginx
+- ARM64 image architecture;
+- effective Compose hardening and loopback-only port binding;
+- absence of Docker socket mounts and published worker ports;
+- port `8010` availability;
+- Nginx example syntax in a disposable container;
+- presence of any named existing vhost file supplied with `--existing-vhost`.
+
+It does not start services, edit Nginx, request certificates, or touch the current database.
+
+## Deploy with an explicit migration gate
+
+Before migrating, complete the Issue #31 backup and rollback drill. Then:
+
+```bash
+export GANDIWA_IMAGE='REGISTRY/GandiwaStudio-api@sha256:IMAGE_DIGEST'
+export GANDIWA_FRONTEND_BUILDER_IMAGE='REGISTRY/GandiwaStudio-frontend-builder@sha256:BUILDER_DIGEST'
+docker compose -f deploy/bejo2/compose.yaml pull api worker migrate
+docker compose -f deploy/bejo2/compose.yaml --profile migration run --rm migrate
+docker compose -f deploy/bejo2/compose.yaml up -d api worker
+curl --fail --silent --show-error http://127.0.0.1:8010/api/v1/health
 ```
 
-Exact UID/GID handling must be explicit in Compose; containers must not run as root without a documented reason.
+Migration failure is a hard stop. Do not start the new API or worker after a failed migration.
 
-## Compose Services
+## Install the isolated Nginx site
 
-### `api`
+Copy `deploy/bejo2/nginx-gandiwa.conf.example` to a **new** filename, replace `GANDIWA_HOSTNAME`, and provision a matching certificate. Do not edit an existing vhost file and do not reuse `komputermu.my.id`.
 
-- same application image as worker;
-- one Uvicorn process for MVP;
-- internal port 8000 mapped only to `127.0.0.1:8010`;
-- healthcheck uses `/api/v1/health`;
-- persistent SQLite and artifact mounts;
-- restart policy `unless-stopped`.
-
-### `worker`
-
-- same application image;
-- separate command for queue consumer;
-- one active job;
-- same SQLite/artifact mounts;
-- no public port;
-- restart policy `unless-stopped`.
-
-No Redis, Celery, PostgreSQL, Node server, or local AI model runs in production MVP.
-
-## Nginx Contract
-
-Nginx:
-
-- serves Vite build as static files;
-- falls back to `index.html` for client routing;
-- proxies only `/api/` to `127.0.0.1:8010`;
-- terminates TLS;
-- sets upload/body/time limits deliberately;
-- uses streaming/no buffering where artifact response requires it;
-- adds a CSP compatible with rasterized/sandboxed SVG preview;
-- never serves raw uploaded SVG or temporary artifacts from its document root;
-- forces authorized artifact downloads to use attachment + nosniff headers;
-- sets secure headers and trusts forwarded headers only from the loopback Nginx hop;
-- does not expose the API container directly.
-
-Actual server name and certificate command remain placeholders until the owner selects the hostname.
-
-## Environment Contract
-
-Production starts from `.env.production.example`, copied outside the repository to `/etc/gandiwa/gandiwa.env`.
-
-Required categories:
-
-- environment, public origin, and trusted hosts;
-- session/CSRF secret and secure cookie flags;
-- SQLite and artifact paths;
-- queue polling, lease, heartbeat, retry, and retention;
-- upload/artifact limits;
-- selected connector URLs and credentials;
-- log level and redaction posture.
-
-Real values must never appear in Git, image layers, Compose YAML, build arguments, shell history, or deployment logs.
-
-## Resource Guardrails
-
-Given 1 vCPU:
-
-- worker concurrency remains `1`;
-- Uvicorn process count remains `1` until measurements justify change;
-- AI inference runs at providers, never locally;
-- heavy SVG/raster tasks are bounded by timeout, dimensions, file size, and node count;
-- Docker images must support `linux/arm64`;
-- Compose must set non-root UID/GID, `no-new-privileges`, dropped capabilities, no privileged mode/Docker socket, bounded PID/temp, and measured CPU/RAM limits;
-- add a 2 GiB swap file before production as OOM protection, but do not treat swap as capacity;
-- reserve capacity for Nginx, Docker, Tailscale, and the existing application;
-- reject/backpressure new jobs when queue depth, free disk, or available memory crosses configured thresholds;
-- monitor disk because temporary generated artifacts can grow silently.
-
-## Manual Deployment Flow
-
-Deployment is not executed by a push alone.
-
-```text
-1. Develop and test on bejo1-oracle.
-2. Owner reviews changes via VS Code Remote SSH.
-3. After explicit approval: commit, push branch, PR, and CI.
-4. Merge requires separate approval.
-5. Create/select a release commit or tag.
-6. On bejo2: fetch the exact release and verify SHA.
-7. Build ARM64-compatible images and frontend static output.
-8. Back up SQLite and environment configuration.
-9. Run Alembic migration as a one-shot release step.
-10. Start/recreate API and worker.
-11. Publish static frontend atomically.
-12. Validate Nginx configuration, then reload.
-13. Verify health, readiness, queue claim/recovery, logs, and browser flow.
+```bash
+sudo nginx -t
+sudo systemctl reload nginx
 ```
 
-Alembic migrations must not be hidden in every container startup. A failed migration stops the release and triggers rollback; never run destructive reset commands on production data.
+Verify both the new hostname and every existing protected hostname after reload. The example proxies only `/api/` to loopback and serves the frontend from `/var/www/gandiwa/current`; it does not use port `3000`.
 
-## Deployment Acceptance Gate
+## Post-deploy verification
 
-A release is successful only after real checks confirm:
+```bash
+docker compose -f deploy/bejo2/compose.yaml ps
+curl --fail --silent https://GANDIWA_HOSTNAME/api/v1/health
+ss -ltn | grep ':8010'
+docker inspect gandiwa-api --format '{{.Config.User}} {{.HostConfig.ReadonlyRootfs}} {{json .HostConfig.CapDrop}}'
+```
 
-- exact expected Git SHA/image is running;
-- HTTPS and application authentication work;
-- `/api/v1/health` and `/api/v1/ready` pass;
-- API port is not publicly exposed;
-- one synthetic queued job reaches terminal success;
-- restart recovery does not duplicate provider dispatch;
-- browser can create/open a local project folder;
-- temporary artifact download and cleanup work;
-- no secret appears in frontend bundle or logs;
-- existing `komputermu.my.id` remains healthy.
+Port `8010` must be bound only to `127.0.0.1`. No worker port may be published.
+Uvicorn trusts the bridge proxy headers because Docker NAT does not present host Nginx as container loopback; the host port remains loopback-only and is never exposed publicly.
 
-## Rollback
+## Rollback boundary
 
-- retain the previous application image/static release;
-- back up SQLite before schema migration;
-- rollback application first when schema is backward compatible;
-- use a tested Alembic downgrade only when explicitly supported;
-- restore database backup if migration is not reversible;
-- verify both Gandiwa and the existing Nginx site after rollback.
-
-## Current Blockers Before First Production Deployment
-
-- application code does not yet exist;
-- dedicated Gandiwa hostname/access mode has not been selected;
-- application identity/bootstrap mechanism has not been selected or implemented;
-- bejo2 currently has no swap;
-- Compose/Nginx manifests and backup scripts have not yet been implemented or tested.
-
-These are deployment gates, not permission to expand product scope.
+Code rollback means restoring the prior immutable image digest and prior static frontend artifact. Schema/data rollback is **not** `alembic downgrade` by default; restore the verified Issue #31 backup into an isolated path, validate it, stop API/worker, then perform the documented atomic replacement. Never point old code at a newer schema without a proven compatibility or restore procedure.

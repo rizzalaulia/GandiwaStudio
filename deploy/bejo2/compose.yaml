@@ -1,0 +1,94 @@
+name: gandiwa
+
+x-runtime: &runtime
+  image: "${GANDIWA_IMAGE:?set GANDIWA_IMAGE to an immutable image reference}"
+  platform: "linux/arm64"
+  env_file:
+    - "${GANDIWA_ENV_FILE:-/etc/gandiwa/gandiwa.env}"
+  user: "${GANDIWA_UID:-10001}:${GANDIWA_GID:-10001}"
+  read_only: true
+  init: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  pids_limit: 128
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=64m,uid=${GANDIWA_UID:-10001},gid=${GANDIWA_GID:-10001},mode=1777
+  volumes:
+    - /srv/gandiwa/data:/var/lib/gandiwa
+    - /srv/gandiwa/artifacts:/var/cache/gandiwa
+  networks:
+    - backend
+  logging:
+    driver: local
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  migrate:
+    <<: *runtime
+    command: ["alembic", "-c", "/app/alembic.ini", "upgrade", "head"]
+    restart: "no"
+    ports: []
+    cpus: 0.50
+    mem_limit: 512m
+    profiles: ["migration"]
+
+  api:
+    <<: *runtime
+    command: ["uvicorn", "gandiwa_api.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--proxy-headers", "--forwarded-allow-ips", "*"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8010:8000"
+    cpus: 0.75
+    mem_limit: 768m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json,urllib.request; assert json.load(urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=2))['status']=='ok'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  worker:
+    <<: *runtime
+    command: ["gandiwa-worker"]
+    restart: unless-stopped
+    ports: []
+    cpus: 0.75
+    mem_limit: 1536m
+    stop_grace_period: 30s
+
+  frontend-build:
+    image: "${GANDIWA_FRONTEND_BUILDER_IMAGE:?set GANDIWA_FRONTEND_BUILDER_IMAGE to an immutable image reference}"
+    platform: "linux/arm64"
+    user: "${GANDIWA_UID:-10001}:${GANDIWA_GID:-10001}"
+
+    read_only: true
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=128m,uid=${GANDIWA_UID:-10001},gid=${GANDIWA_GID:-10001},mode=1777
+      - /home/node/.cache:rw,nosuid,nodev,size=256m,uid=${GANDIWA_UID:-10001},gid=${GANDIWA_GID:-10001},mode=0700
+      - /work:rw,exec,nosuid,nodev,size=1536m,uid=${GANDIWA_UID:-10001},gid=${GANDIWA_GID:-10001},mode=0700
+    working_dir: /work
+    volumes:
+      - /opt/gandiwa/current:/source:ro
+      - /var/www/gandiwa/releases/staging:/output
+    command: ["sh", "-euxc", "tar -C /source --exclude=.git --exclude=node_modules --exclude='*/node_modules' --exclude='*/dist' -cf - . | tar -C /work -xf - && pnpm install --frozen-lockfile && pnpm --filter @gandiwa/contracts build && pnpm --filter @gandiwa/adobe-rules build && pnpm --filter @gandiwa/web build && cp -R apps/web/dist/. /output/"]
+    network_mode: bridge
+    ports: []
+    cpus: 1.00
+    mem_limit: 2048m
+    restart: "no"
+    profiles: ["release"]
+
+networks:
+  backend:
+    driver: bridge
+    internal: false
