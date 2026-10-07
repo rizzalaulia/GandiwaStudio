@@ -162,6 +162,51 @@ class BackupRestoreDrillContractTests(unittest.TestCase):
         self.assertEqual(list(self.offsite.glob("*.gandiwa")), [])
         self.assertEqual(list(self.offsite.glob("*.manifest.json")), [])
 
+    def test_backup_rejects_a_symlinked_artifact_root_before_writing_bundle(self) -> None:
+        actual_artifacts = self.root / "actual-artifacts"
+        os.replace(self.artifacts, actual_artifacts)
+        self.artifacts.symlink_to(actual_artifacts, target_is_directory=True)
+
+        with self.assertRaisesRegex(backup_drill.DrillError, "artifact directory.*symlink"):
+            backup_drill.create_backup(
+                database=self.database,
+                artifacts=self.artifacts,
+                destination=self.offsite,
+                key_file=self.key,
+                release_id="sha256:test-release",
+                retention_hours=24,
+            )
+
+        self.assertEqual(list(self.offsite.iterdir()), [])
+
+    def test_restore_accepts_a_backup_with_no_durable_artifacts(self) -> None:
+        for artifact in self.artifacts.iterdir():
+            artifact.unlink()
+        bundle = backup_drill.create_backup(
+            database=self.database,
+            artifacts=self.artifacts,
+            destination=self.offsite,
+            key_file=self.key,
+            release_id="sha256:test-release",
+            retention_hours=24,
+        )
+
+        staging = self.root / "empty-artifacts-staging"
+        report = backup_drill.restore_verify(
+            archive=bundle.archive_path,
+            manifest=bundle.manifest_path,
+            key_file=self.key,
+            staging=staging,
+            expected_uid=os.getuid(),
+            expected_gid=os.getgid(),
+            expected_release_id="sha256:test-release",
+            expected_revision="0003",
+        )
+
+        self.assertEqual(report["artifacts"], [])
+        self.assertTrue((staging / "artifacts").is_dir())
+        self.assertEqual(list((staging / "artifacts").iterdir()), [])
+
     def test_restore_verifies_then_reconciles_active_jobs_without_redispatch(self) -> None:
         bundle = backup_drill.create_backup(
             database=self.database,

@@ -121,7 +121,18 @@ def _tar_add_file(archive: tarfile.TarFile, path: Path, arcname: str) -> None:
         archive.addfile(info, handle)
 
 
+def _tar_add_directory(archive: tarfile.TarFile, path: Path, arcname: str) -> None:
+    info = archive.gettarinfo(str(path), arcname=arcname)
+    info.uid = 0
+    info.gid = 0
+    info.uname = ""
+    info.gname = ""
+    archive.addfile(info)
+
+
 def _build_plaintext_archive(database: Path, artifacts: Path) -> tuple[bytes, str, list[dict[str, str]]]:
+    if artifacts.is_symlink():
+        raise DrillError(f"artifact directory must not be a symlink: {artifacts}")
     if not artifacts.is_dir():
         raise DrillError(f"artifact directory is missing: {artifacts}")
     with tempfile.TemporaryDirectory(prefix="gandiwa-backup-") as temporary:
@@ -132,6 +143,7 @@ def _build_plaintext_archive(database: Path, artifacts: Path) -> tuple[bytes, st
         artifact_files: list[dict[str, str]] = []
         with tarfile.open(fileobj=output, mode="w") as archive:
             _tar_add_file(archive, copied_database, "data/gandiwa.sqlite3")
+            _tar_add_directory(archive, artifacts, "artifacts")
             for path in sorted(artifacts.rglob("*")):
                 if path.is_symlink():
                     raise DrillError(f"artifact symlink is not backup-safe: {path}")
