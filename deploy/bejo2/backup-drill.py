@@ -121,37 +121,103 @@ def _tar_add_file(archive: tarfile.TarFile, path: Path, arcname: str) -> None:
         archive.addfile(info, handle)
 
 
-def _tar_add_directory(archive: tarfile.TarFile, path: Path, arcname: str) -> None:
-    info = archive.gettarinfo(str(path), arcname=arcname)
+def _open_artifact_root(artifacts: Path) -> int:
+    """Open an absolute artifact tree without accepting a symlink in any component."""
+    if not artifacts.is_absolute():
+        raise DrillError("artifact directory must be absolute for no-follow verification")
+    try:
+        return _open_directory_nofollow(artifacts)
+    except OSError as exc:
+        raise DrillError(f"artifact directory contains unsafe symlink or is unreadable: {artifacts}") from exc
+
+
+def _tar_info(name: str, details: os.stat_result, *, directory: bool) -> tarfile.TarInfo:
+    info = tarfile.TarInfo(name)
+    info.mode = stat.S_IMODE(details.st_mode)
     info.uid = 0
     info.gid = 0
     info.uname = ""
     info.gname = ""
-    archive.addfile(info)
+    info.mtime = int(details.st_mtime)
+    info.type = tarfile.DIRTYPE if directory else tarfile.REGTYPE
+    info.size = 0 if directory else details.st_size
+    return info
+
+
+def _same_inode(expected: os.stat_result, opened: os.stat_result) -> bool:
+    return (expected.st_dev, expected.st_ino) == (opened.st_dev, opened.st_ino)
+
+
+def _archive_artifact_tree(
+    archive: tarfile.TarFile, directory_fd: int, relative: Path = Path()
+) -> list[dict[str, str]]:
+    """Archive one descriptor-pinned artifact tree, rejecting every symlink/type race."""
+    artifacts: list[dict[str, str]] = []
+    try:
+        entries = sorted(os.scandir(directory_fd), key=lambda entry: entry.name)
+    except OSError as exc:
+        raise DrillError(f"cannot read artifact directory safely: {exc}") from exc
+    for entry in entries:
+        display = relative / entry.name
+        try:
+            expected = os.stat(entry.name, dir_fd=directory_fd, follow_symlinks=False)
+        except OSError as exc:
+            raise DrillError(f"artifact changed while being inspected: {display}") from exc
+        if stat.S_ISLNK(expected.st_mode):
+            raise DrillError(f"artifact symlink is not backup-safe: {display}")
+        arcname = str(Path("artifacts") / display)
+        if stat.S_ISDIR(expected.st_mode):
+            try:
+                child_fd = os.open(entry.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory_fd)
+            except OSError as exc:
+                raise DrillError(f"artifact directory changed while being opened: {display}") from exc
+            try:
+                opened = os.fstat(child_fd)
+                if not stat.S_ISDIR(opened.st_mode) or not _same_inode(expected, opened):
+                    raise DrillError(f"artifact directory changed while being opened: {display}")
+                archive.addfile(_tar_info(arcname, opened, directory=True))
+                artifacts.extend(_archive_artifact_tree(archive, child_fd, display))
+            finally:
+                os.close(child_fd)
+        elif stat.S_ISREG(expected.st_mode):
+            try:
+                child_fd = os.open(
+                    entry.name, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW, dir_fd=directory_fd
+                )
+            except OSError as exc:
+                raise DrillError(f"artifact file changed while being opened: {display}") from exc
+            try:
+                opened = os.fstat(child_fd)
+                if not stat.S_ISREG(opened.st_mode) or not _same_inode(expected, opened):
+                    raise DrillError(f"artifact file changed while being opened: {display}")
+                with os.fdopen(child_fd, "rb", closefd=False) as handle:
+                    contents = handle.read()
+                if len(contents) != opened.st_size:
+                    raise DrillError(f"artifact file changed while being read: {display}")
+                archive.addfile(_tar_info(arcname, opened, directory=False), io.BytesIO(contents))
+                artifacts.append({"path": display.as_posix(), "sha256": _sha256_bytes(contents)})
+            finally:
+                os.close(child_fd)
+        else:
+            raise DrillError(f"artifact path is not a regular file or directory: {display}")
+    return artifacts
 
 
 def _build_plaintext_archive(database: Path, artifacts: Path) -> tuple[bytes, str, list[dict[str, str]]]:
-    if artifacts.is_symlink():
-        raise DrillError(f"artifact directory must not be a symlink: {artifacts}")
-    if not artifacts.is_dir():
-        raise DrillError(f"artifact directory is missing: {artifacts}")
-    with tempfile.TemporaryDirectory(prefix="gandiwa-backup-") as temporary:
-        copied_database = Path(temporary) / "gandiwa.sqlite3"
-        _online_sqlite_backup(database, copied_database)
-        database_sha256 = _sha256_file(copied_database)
-        output = io.BytesIO()
-        artifact_files: list[dict[str, str]] = []
-        with tarfile.open(fileobj=output, mode="w") as archive:
-            _tar_add_file(archive, copied_database, "data/gandiwa.sqlite3")
-            _tar_add_directory(archive, artifacts, "artifacts")
-            for path in sorted(artifacts.rglob("*")):
-                if path.is_symlink():
-                    raise DrillError(f"artifact symlink is not backup-safe: {path}")
-                if path.is_file():
-                    relative = path.relative_to(artifacts).as_posix()
-                    _tar_add_file(archive, path, str(Path("artifacts") / relative))
-                    artifact_files.append({"path": relative, "sha256": _sha256_file(path)})
-        return output.getvalue(), database_sha256, artifact_files
+    artifact_root_fd = _open_artifact_root(artifacts)
+    try:
+        with tempfile.TemporaryDirectory(prefix="gandiwa-backup-") as temporary:
+            copied_database = Path(temporary) / "gandiwa.sqlite3"
+            _online_sqlite_backup(database, copied_database)
+            database_sha256 = _sha256_file(copied_database)
+            output = io.BytesIO()
+            with tarfile.open(fileobj=output, mode="w") as archive:
+                _tar_add_file(archive, copied_database, "data/gandiwa.sqlite3")
+                archive.addfile(_tar_info("artifacts", os.fstat(artifact_root_fd), directory=True))
+                artifact_files = _archive_artifact_tree(archive, artifact_root_fd)
+            return output.getvalue(), database_sha256, artifact_files
+    finally:
+        os.close(artifact_root_fd)
 
 
 def create_backup(

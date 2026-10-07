@@ -6,11 +6,13 @@ import hashlib
 import importlib.util
 import json
 import os
+import signal
 import sqlite3
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -178,6 +180,104 @@ class BackupRestoreDrillContractTests(unittest.TestCase):
             )
 
         self.assertEqual(list(self.offsite.iterdir()), [])
+
+    def test_backup_rejects_an_artifact_root_with_a_symlinked_ancestor(self) -> None:
+        external_parent = self.root / "external-parent"
+        external_parent.mkdir()
+        actual_artifacts = external_parent / "artifacts"
+        os.replace(self.artifacts, actual_artifacts)
+        linked_parent = self.root / "linked-parent"
+        linked_parent.symlink_to(external_parent, target_is_directory=True)
+
+        with self.assertRaisesRegex(backup_drill.DrillError, "unsafe symlink"):
+            backup_drill.create_backup(
+                database=self.database,
+                artifacts=linked_parent / "artifacts",
+                destination=self.offsite,
+                key_file=self.key,
+                release_id="sha256:test-release",
+                retention_hours=24,
+            )
+
+        self.assertEqual(list(self.offsite.iterdir()), [])
+
+    def test_backup_rejects_a_fifo_swapped_in_for_an_artifact_file_without_hanging(self) -> None:
+        original_open = backup_drill.os.open
+        swapped = False
+
+        def swap_file_for_fifo(path: str | bytes | os.PathLike[str] | os.PathLike[bytes], flags: int, *args: object, **kwargs: object) -> int:
+            nonlocal swapped
+            if path == "job-queued.bin" and not swapped and kwargs.get("dir_fd") is not None:
+                swapped = True
+                os.unlink(self.artifacts / "job-queued.bin")
+                os.mkfifo(self.artifacts / "job-queued.bin")
+            return original_open(path, flags, *args, **kwargs)
+
+        previous_handler = signal.getsignal(signal.SIGALRM)
+        signal.signal(signal.SIGALRM, lambda _signum, _frame: (_ for _ in ()).throw(TimeoutError("backup blocked on FIFO")))
+        signal.alarm(2)
+        started = time.monotonic()
+        try:
+            with (
+                patch.object(backup_drill.os, "open", side_effect=swap_file_for_fifo),
+                self.assertRaisesRegex(backup_drill.DrillError, "artifact file changed"),
+            ):
+                backup_drill.create_backup(
+                    database=self.database,
+                    artifacts=self.artifacts,
+                    destination=self.offsite,
+                    key_file=self.key,
+                    release_id="sha256:test-release",
+                    retention_hours=24,
+                )
+        finally:
+            elapsed = time.monotonic() - started
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, previous_handler)
+
+        self.assertTrue(swapped)
+        self.assertLess(elapsed, 0.5, "artifact FIFO race must fail closed without blocking")
+        self.assertEqual(list(self.offsite.iterdir()), [])
+
+    def test_backup_holds_artifact_root_descriptor_across_a_symlink_swap(self) -> None:
+        original_root = self.root / "artifacts-before-swap"
+        external_root = self.root / "outside-artifacts"
+        external_root.mkdir()
+        (external_root / "outside-secret.bin").write_bytes(b"must never enter backup")
+        original_archive_tree = backup_drill._archive_artifact_tree
+
+        def swap_root_after_descriptor_open(*args: object, **kwargs: object) -> list[dict[str, str]]:
+            os.replace(self.artifacts, original_root)
+            self.artifacts.symlink_to(external_root, target_is_directory=True)
+            return original_archive_tree(*args, **kwargs)
+
+        with patch.object(backup_drill, "_archive_artifact_tree", side_effect=swap_root_after_descriptor_open):
+            bundle = backup_drill.create_backup(
+                database=self.database,
+                artifacts=self.artifacts,
+                destination=self.offsite,
+                key_file=self.key,
+                release_id="sha256:test-release",
+                retention_hours=24,
+            )
+
+        staging = self.root / "descriptor-swap-staging"
+        report = backup_drill.restore_verify(
+            archive=bundle.archive_path,
+            manifest=bundle.manifest_path,
+            key_file=self.key,
+            staging=staging,
+            expected_uid=os.getuid(),
+            expected_gid=os.getgid(),
+            expected_release_id="sha256:test-release",
+            expected_revision="0003",
+        )
+
+        self.assertEqual(
+            [entry["path"] for entry in report["artifacts"]],
+            ["job-queued.bin", "job-waiting.bin"],
+        )
+        self.assertFalse((staging / "artifacts" / "outside-secret.bin").exists())
 
     def test_restore_accepts_a_backup_with_no_durable_artifacts(self) -> None:
         for artifact in self.artifacts.iterdir():
