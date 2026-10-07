@@ -158,6 +158,25 @@ class KanbanFlowTests(unittest.TestCase):
         issue_numbers = {int(issue_number) for issue_number in dependencies}
 
         self.assertEqual(issue_numbers, {*range(2, 33), 56, 58})
+        self.assertEqual(
+            dependencies["32"],
+            [28, 30, 31],
+            "MVP acceptance excludes deferred post-MVP vector editor verification #29.",
+        )
+
+        transitive_predecessors: set[int] = set()
+        pending = list(dependencies["32"])
+        while pending:
+            predecessor = pending.pop()
+            if predecessor in transitive_predecessors:
+                continue
+            transitive_predecessors.add(predecessor)
+            pending.extend(dependencies[str(predecessor)])
+
+        self.assertFalse(
+            {27, 29} & transitive_predecessors,
+            "MVP acceptance must not transitively depend on deferred SVG editor work.",
+        )
         kanban_flow.validate_dependencies(dependencies, issue_numbers)
 
     def test_refuses_live_graphql_results_when_any_connection_is_truncated(self) -> None:

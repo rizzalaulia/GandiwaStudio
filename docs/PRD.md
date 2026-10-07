@@ -14,7 +14,7 @@
 
 ## 1. Executive Summary
 
-Gandiwa Studio adalah workspace produksi aset Adobe Stock yang menggabungkan brief, generasi AI multi-provider, penyuntingan vector ringan, quality gate, metadata, dan ekspor proyek. Pengguna wajib memilih **Photo**, **Illustration**, atau **Vector** sebelum generasi. Pilihan ini menjadi kontrak workflow: menentukan model yang tersedia, format output, validator, editor, serta metadata yang digunakan.
+Gandiwa Studio adalah workspace produksi aset Adobe Stock yang menggabungkan brief, generasi AI multi-provider, quality gate, metadata, dan ekspor proyek. Pengguna wajib memilih **Photo**, **Illustration**, atau **Vector** sebelum generasi. Pilihan ini menjadi kontrak workflow: menentukan model yang tersedia, format output, validator, serta metadata yang digunakan. Penyuntingan SVG internal ditunda setelah MVP 1.0; perbaikan vector dilakukan di editor eksternal dan kembali sebagai revisi baru untuk diaudit ulang.
 
 Produk memecahkan fragmentasi workflow tanpa membangun router AI baru. Pengguna memilih konektor dan model tujuan secara eksplisit. Konektor wajib MVP adalah fal.ai dan API 9Router melalui Tailscale; konektor langsung lain dapat ditambahkan kemudian melalui interface yang sama. BYOK dikonfigurasi pemilik deployment pada backend secret file/environment; frontend tidak menerima, menyimpan, atau menampilkan API key. Gandiwa hanya membentuk request, mengirimkannya ke endpoint pilihan, dan menerima hasil. Routing/fallback internal 9Router berada di luar tanggung jawab Gandiwa.
 
@@ -46,8 +46,8 @@ Produk memecahkan fragmentasi workflow tanpa membangun router AI baru. Pengguna 
 | Tipe | Format generasi MVP | Editor | Quality gate utama |
 |---|---|---|---|
 | Photo | PNG, JPEG | inspect, konversi, dan resize eksplisit; retouch melalui editor eksternal | resolusi, noise, artefak, anatomi, legal |
-| Illustration | PNG, JPEG; SVG jika memang native vector | preparation raster atau editor SVG untuk hasil SVG | style, artefak, teks, anatomi, legal |
-| Vector | SVG | editor vector ringan | struktur SVG, raster tertanam, path, artboard, render parity |
+| Illustration | PNG, JPEG; SVG jika memang native vector | preparation raster; SVG diperbaiki di editor eksternal bila diperlukan | style, artefak, teks, anatomi, legal |
+| Vector | SVG | sanitasi/audit dan handoff ke editor eksternal; editor internal pasca-MVP | struktur SVG, raster tertanam, path, artboard, render parity |
 
 Ekspor AI/EPS tidak dijanjikan pada MVP. SVG dapat dibuka di Illustrator/Inkscape untuk konversi bila dibutuhkan.
 
@@ -71,7 +71,7 @@ Ekspor AI/EPS tidak dijanjikan pada MVP. SVG dapat dibuka di Illustrator/Inkscap
 Browser (React)
   ├─ Project workspace + File System Access API
   ├─ Content type selector
-  ├─ Gallery / compare / editor ringan
+  ├─ Gallery / compare / handoff editor eksternal untuk SVG
   └─ Audit + metadata + export
              │ same-origin HTTPS
              ▼
@@ -198,14 +198,14 @@ Single worker process
   - [ ] Retouching kompleks diarahkan ke editor eksternal.
 - Priority: P0
 
-**GS-010 — Editor SVG ringan**
+**GS-010 — Editor SVG ringan (ditunda setelah MVP 1.0)**
 - Sebagai pengguna, saya ingin memperbaiki vector tanpa editor penuh.
 - Acceptance Criteria:
   - [ ] Mendukung select, move, resize, recolor, layer reorder, hide/show, dan delete.
   - [ ] Undo/redo tersedia untuk aksi edit.
   - [ ] Dokumen dengan node melewati ambang aman masuk preview-only.
   - [ ] Setiap penyimpanan menghasilkan revisi, bukan merusak source asli.
-- Priority: P0
+- Priority: Post-MVP
 
 **GS-011 — Mengirim ke editor eksternal**
 - Sebagai pengguna, saya ingin mengekspor source agar dapat dibuka di Illustrator/Inkscape.
@@ -272,9 +272,8 @@ Single worker process
 
 ### Performance
 
-- UI interaktif tetap responsif pada SVG hingga 20.000 node di perangkat target.
+- Preview dan audit UI tetap responsif pada SVG hingga 20.000 node di perangkat target.
 - SVG di atas 100.000 node dibuka preview-only secara default.
-- Interaksi editor menargetkan 30 FPS atau lebih.
 - Respons UI lokal non-AI ditargetkan kurang dari 200 ms.
 - Timeout provider dapat dikonfigurasi; job panjang tidak memblokir halaman.
 
@@ -319,7 +318,7 @@ Single worker process
 3. Workspace
 4. Generate Panel
 5. Candidate Compare
-6. Vector Editor
+6. Vector Editor (pasca-MVP)
 7. Audit Center
 8. Metadata Editor
 9. Export Center
@@ -336,7 +335,7 @@ Buka/pilih folder
 → pilih provider/model
 → generate kandidat
 → bandingkan dan pilih master
-→ edit ringan bila SVG
+→ koreksi SVG di editor eksternal bila diperlukan, lalu impor sebagai revisi baru
 → jalankan preflight + audit AI
 → perbaiki atau setujui
 → susun metadata
@@ -377,7 +376,7 @@ Setiap generation job wajib menyimpan snapshot `ruleset_id` dan membentuk resolv
 
 Format dipisahkan menjadi `generation_format`, `working_format`, `master_format`, dan `submission_format`. PNG dapat menjadi working/master, tetapi Photo dan Illustration raster hanya menjadi Adobe-ready setelah dikonversi serta divalidasi sebagai JPEG. Vector dan Illustration vector menggunakan SVG sebagai submission format MVP.
 
-Audit berjalan setelah generasi, sanitasi/normalisasi, edit, konversi, dan sebelum export. Edit pixel/path atau metadata relevan membatalkan audit serta approval lama. Kontrak lengkap mengikuti `ADOBE-RULESET.md`.
+Audit berjalan setelah generasi, sanitasi/normalisasi, konversi, dan sebelum export. Koreksi eksternal yang diimpor sebagai revisi baru, atau metadata relevan yang berubah, membatalkan audit serta approval lama. Kontrak lengkap mengikuti `ADOBE-RULESET.md`.
 
 ## 11. Definition of Done MVP
 
@@ -388,14 +387,14 @@ MVP selesai jika satu pengguna dapat:
 - memilih connector backend yang telah dikonfigurasi dan model secara eksplisit;
 - menjalankan jalur raster melalui fal.ai dan jalur reasoning/SVG/metadata melalui 9Router;
 - menghasilkan working artifact PNG/JPEG/SVG;
-- memilih master dan mengedit SVG ringan;
+- memilih master dan, bila perlu, mengoreksi SVG pada editor eksternal lalu mengimpornya sebagai revisi baru;
 - menjalankan ruleset per revisi serta melihat bukti PASS/WARNING/FAIL;
 - mengonversi Photo/Illustration raster menjadi JPEG submission minimum 4 MP;
 - memvalidasi Vector/Illustration vector sebagai SVG tanpa raster/active content;
 - menyusun metadata dan AI disclosure;
 - memberi approval final yang terikat checksum, revisi, audit, dan ruleset;
 - mengekspor paket hanya setelah status `ADOBE_READY`;
-- membuktikan edit setelah approval mencabut status tersebut.
+- membuktikan revisi atau metadata setelah approval mencabut status tersebut.
 
 Seluruh acceptance criteria P0 dan fixture minimum `ADOBE-RULESET.md` harus lulus. Tidak boleh ada secret pada frontend, manifest, artifact, atau log.
 
@@ -407,7 +406,7 @@ Seluruh acceptance criteria P0 dan fixture minimum `ADOBE-RULESET.md` harus lulu
 - browser sebagai pemilik directory handle; backend hanya memproses upload sementara dan mengembalikan artifact;
 - konektor wajib 9Router dan fal.ai; Gandiwa tidak melakukan routing/fallback;
 - dua vertical slice: raster sampai JPEG Adobe-ready dan vector sampai SVG Adobe-ready;
-- editor SVG ringan saja;
+- sanitasi/audit SVG dan handoff ke editor eksternal; editor SVG internal ditunda setelah MVP 1.0;
 - upload Adobe Stock manual;
 - manifest proyek sebagai source of truth kreatif portabel; SQLite menyimpan cache/index serta state operasional durable, dan hanya bagian cache/index yang boleh dibangun ulang dari manifest.
 
