@@ -14,7 +14,7 @@
 
 ## 1. Ringkasan Bisnis
 
-Gandiwa Studio adalah aplikasi web privat untuk merancang, menghasilkan, menyunting ringan, memeriksa, dan menyiapkan aset **Photo, Illustration, atau Vector** bagi workflow Adobe Stock Contributor. Jenis konten dipilih sejak awal agar jalur generasi, pemeriksaan, format ekspor, dan metadata mengikuti persyaratan tipe aset tersebut.
+Gandiwa Studio adalah aplikasi web privat untuk merancang, menghasilkan, memeriksa, dan menyiapkan aset **Photo, Illustration, atau Vector** bagi workflow Adobe Stock Contributor. Jenis konten dipilih sejak awal agar jalur generasi, pemeriksaan, format ekspor, dan metadata mengikuti persyaratan tipe aset tersebut. Penyuntingan SVG internal ditunda setelah MVP 1.0; koreksi vector memakai editor eksternal dan kembali sebagai revisi baru.
 
 Aplikasi menggunakan pola konektor API/BYOK server-side. Pemilik deployment memasang credential pada backend secret file/environment; browser tidak menerima, menyimpan, atau menampilkan API key. Pengguna memilih provider dan model secara eksplisit untuk setiap pekerjaan. Konektor wajib MVP adalah 9Router melalui Tailscale dan fal.ai; konektor langsung lain dapat ditambahkan pasca-gate MVP melalui interface yang sama. Gandiwa tidak melakukan routing, load balancing, maupun fallback antar-provider; bila endpoint yang dipilih adalah 9Router, seluruh perilaku routing merupakan tanggung jawab 9Router.
 
@@ -49,7 +49,7 @@ Satu pengguna: Master Peng sebagai Adobe Stock Contributor sekaligus operator ap
 - memilih provider/model sesuai tugas;
 - menyimpan hasil ke folder laptop;
 - membandingkan beberapa kandidat;
-- melakukan edit vector ringan;
+- mengoreksi vector di editor eksternal bila diperlukan, lalu mengimpor revisi baru;
 - memperoleh laporan preflight yang transparan;
 - mengekspor aset dan metadata secara terorganisasi.
 
@@ -65,7 +65,7 @@ Satu pengguna: Master Peng sebagai Adobe Stock Contributor sekaligus operator ap
 - profil model berdasarkan peran: art director, generator, auditor, metadata writer;
 - brief terstruktur, prompt, negative prompt, dan riwayat generasi;
 - galeri kandidat dan perbandingan hasil;
-- editor SVG ringan: warna, posisi, ukuran, layer, hapus objek, dan preview;
+- sanitasi/audit SVG serta handoff ke editor eksternal; editor SVG internal ditunda setelah MVP 1.0;
 - audit teknis deterministik serta audit berbantuan AI;
 - metadata: judul, keyword, kategori, dan label generative AI;
 - paket export siap ditinjau sebelum upload manual;
@@ -73,7 +73,7 @@ Satu pengguna: Master Peng sebagai Adobe Stock Contributor sekaligus operator ap
 
 ### Tidak termasuk
 
-- editor node/path penuh sekelas Adobe Illustrator;
+- editor SVG internal, termasuk editor node/path penuh sekelas Adobe Illustrator;
 - training atau fine-tuning model pada MVP;
 - seluruh inference model AI lokal;
 - kolaborasi dan multi-user;
@@ -119,7 +119,7 @@ Satu pengguna: Master Peng sebagai Adobe Stock Contributor sekaligus operator ap
 | BR-04 | Mengganti provider/model tanpa merombak aplikasi | Must |
 | BR-05 | Menyimpan secret di backend dan meredaksi log | Must |
 | BR-06 | Membandingkan kandidat dan menetapkan master | Must |
-| BR-07 | Menyunting SVG secara ringan dan non-destruktif | Must |
+| BR-07 | Menyunting SVG secara ringan dan non-destruktif | Post-MVP |
 | BR-08 | Menjalankan preflight teknis dan audit berbantuan AI | Must |
 | BR-09 | Menyiapkan metadata dan paket export | Must |
 | BR-10 | Mencatat hasil moderasi untuk pembelajaran | Should |
@@ -130,7 +130,7 @@ Satu pengguna: Master Peng sebagai Adobe Stock Contributor sekaligus operator ap
 |---|---|---|
 | Perbedaan kemampuan provider | Job gagal atau format salah | Registry capability dan validasi sebelum request |
 | SVG berisi script/external resource | Risiko keamanan browser | Sanitasi server-side dan CSP ketat |
-| SVG hasil tracing terlalu kompleks | Editor tersendat | Ambang node, worker, dan preview-only |
+| SVG hasil tracing terlalu kompleks | Preview/audit tersendat | Ambang node, worker, dan preview-only |
 | API key bocor | Kerugian akun/biaya | Backend-only secret, redaksi log, rotasi key |
 | File System Access API tidak didukung | Project tidak dapat dibuka | Target Chrome/Edge dan export/import package |
 | Audit AI memberi keyakinan palsu | Aset buruk tetap diekspor | Label rekomendasi dan human approval wajib |
@@ -169,7 +169,7 @@ Ruang lingkup yang dikunci:
 - konektor MVP wajib: 9Router dan fal.ai; konektor langsung lain mengikuti kontrak yang sama tetapi tidak memblokir rilis MVP;
 - output kerja PNG/JPEG/SVG; submission MVP JPEG atau SVG sesuai ruleset;
 - SQLite durable queue, satu worker, priority+FIFO, lease/heartbeat/recovery, cooperative cancel, dan REST polling;
-- editor SVG ringan, preflight, AI risk screening, metadata, approval, dan export package;
+- sanitasi/audit SVG serta handoff editor eksternal, preflight, AI risk screening, metadata, approval, dan export package; editor SVG internal ditunda setelah MVP 1.0;
 - production Docker Compose pada `bejo2-vnic`, static frontend melalui host Nginx, FastAPI internal, tanpa Redis/Celery/Node production server;
 - upload Adobe Stock tetap manual.
 

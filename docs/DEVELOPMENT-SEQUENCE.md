@@ -157,7 +157,13 @@ TAHAP 7 — Uji MVP end-to-end
 - regenerate hanya dengan perubahan prompt bermakna atau alasan penolakan tercatat;
 - hasil tidak dapat melewati audit/export gate.
 
-### Tahap 6 — Editor SVG Ringan
+### Tahap 6 — Editor SVG Ringan (ditunda setelah MVP 1.0)
+
+> **Status MVP 1.0:** ditunda melalui change control 2026-09-15. Gandiwa
+> tetap mengimpor dan mengaudit SVG secara fail-closed, tetapi perbaikan SVG
+> dilakukan di Illustrator/Inkscape lalu kembali sebagai revisi baru untuk
+> diaudit ulang. Scope editor di bawah ini adalah lintasan pasca-MVP (#27),
+> bukan prasyarat Tahap 7 MVP.
 
 **Tujuan:** memperbaiki vector sederhana tanpa mencoba menggantikan Illustrator/Inkscape.
 
@@ -187,7 +193,11 @@ TAHAP 7 — Uji MVP end-to-end
 
 - satu Photo dari generate/import sampai JPEG Adobe-ready dan export;
 - satu Illustration raster sampai JPEG Adobe-ready dan export;
-- satu Vector sampai SVG Adobe-ready, edit ringan, audit ulang, dan export;
+- satu Vector dari import (atau output native-SVG bila tersedia) sampai SVG
+  Adobe-ready dan export: sanitasi fail-closed → audit → metadata/disclosure →
+  approval → export, tanpa editor SVG internal; perubahan eksternal masuk
+  kembali sebagai revisi baru dan wajib melalui sanitasi/audit,
+  metadata/disclosure, serta approval baru sebelum export;
 - failure scenarios untuk folder permission, provider failure, invalid file, blocking rule, stale approval, dan interrupted job.
 
 **Gate lulus:**
@@ -197,6 +207,10 @@ TAHAP 7 — Uji MVP end-to-end
 - project dapat ditutup dan dibuka kembali tanpa kehilangan state;
 - dokumentasi install, development, operasi, dan keterbatasan sesuai perilaku nyata;
 - belum ada klaim fitur yang tidak berhasil dijalankan.
+- evidence otomatis dan browser-local dicatat terpisah dari smoke produksi.
+  Health/readiness, queue, Nginx, TLS, monitoring, dan existing-site smoke
+  hanya dapat dinyatakan lulus setelah exact approved release benar-benar
+  dideploy ke bejo2; tidak ada test lokal yang boleh menggantikannya.
 
 ## 5. Pekerjaan Pertama yang Diizinkan
 
@@ -211,8 +225,8 @@ Pekerjaan implementasi pertama adalah **Tahap 1 — Aplikasi Dasar Hidup**. Taha
 | 3. Import dan pemeriksaan | BLOCKED | Tahap 2 lulus |
 | 4. Persiapan dan export | BLOCKED | Tahap 3 lulus; remediasi UX #56 lulus sebelum UI tahap berikutnya |
 | 5. Generasi API | BLOCKED | Tahap 4 lulus; UI #26 menunggu gate UX #56 |
-| 6. Editor SVG ringan | BLOCKED | Tahap 5 lulus; #27 tetap menunggu #26 → #56 |
-| 7. Verifikasi MVP | BLOCKED | Tahap 6 lulus |
+| 6. Editor SVG ringan | DEFERRED | Pasca-MVP: #27 menunggu #26 → #56 |
+| 7. Verifikasi MVP | BLOCKED | #28, #30, dan #31 lulus; smoke produksi menunggu deployment release yang disetujui |
 
 ## 7. Change Control
 
@@ -280,3 +294,30 @@ Tanpa enam hal tersebut, urutan dalam dokumen ini tetap berlaku.
    issue #58 (baru), komentar #24, #25, #26, #27, #29.
 6. **Persetujuan pemilik produk:** Master Peng memberi titah 2026-09-15:
    “terapkan”.
+
+### Change request 2026-10-05 — Realignment acceptance Tahap 7 / #32
+
+1. **Masalah baseline:** #32 masih memblokir Tahap 7 pada #29 dan menuntut
+   edit SVG internal, padahal #27/#29 telah ditunda setelah MVP 1.0 melalui
+   change control 2026-09-15. Dependency graph dan acceptance lama membuat
+   MVP tidak mungkin ditutup tanpa mengerjakan scope pasca-MVP.
+2. **Perubahan:** #32 hanya bergantung pada #28, #30, dan #31. Dependency
+   produksi #30 tidak lagi bergantung pada #27 yang deferred, sehingga #32
+   bebas dari editor internal secara langsung maupun transitif. Skenario Vector
+   MVP adalah import/native SVG → sanitasi → audit → metadata/disclosure →
+   approval → export, tanpa editor internal. Koreksi SVG dilakukan eksternal,
+   lalu diimpor sebagai revisi baru yang harus menjalani evidence baru.
+3. **Alternatif:** (a) memaksa #27/#29 kembali ke MVP ditolak karena membatalkan
+   change control; (b) menghapus seluruh skenario Vector ditolak karena
+   sanitasi/audit/export SVG tetap kontrak MVP; (c) menganggap test lokal
+   sebagai smoke produksi ditolak karena tidak membuktikan Nginx/TLS/operasi
+   host bejo2.
+4. **Dampak:** editor dan edit/re-audit internal tetap pekerjaan pasca-MVP;
+   coverage Vector MVP tetap fail-closed dan revision-bound. Evidence #32
+   dipisah: gate repository/browser-local dapat berjalan dari source, sedangkan
+   smoke produksi hanya dijalankan terhadap release yang disetujui dan benar-
+   benar terdeploy.
+5. **Dokumen sinkron:** `DEVELOPMENT-SEQUENCE.md`,
+   `.github/gandiwa-dependencies.json`, kontrak test Kanban, dan Issue #32.
+6. **Persetujuan pemilik produk:** Master Peng memberi titah 2026-10-05:
+   “ya arahkan ulang acceptance 32 nya”.

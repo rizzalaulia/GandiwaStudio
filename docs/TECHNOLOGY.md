@@ -3,7 +3,7 @@
 **Baseline:** `mvp-1.0`  
 **Status:** LOCKED  
 **Owner:** Master Peng  
-**Last synchronized:** 8 September 2026
+**Last synchronized:** 5 Oktober 2026
 
 ## Purpose
 
@@ -17,7 +17,7 @@ Gandiwa adalah aplikasi web local-first yang dibantu backend:
 Browser pengguna
 ├── React UI
 ├── File System Access API
-├── preview dan editor SVG ringan
+├── preview SVG yang tersanitasi dan handoff editor eksternal (editor internal pasca-MVP)
 └── menulis project/artifact ke folder lokal
           │ HTTPS
           ▼
